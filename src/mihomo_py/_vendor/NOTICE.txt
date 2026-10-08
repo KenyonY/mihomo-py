@@ -1,0 +1,20 @@
+Bundled third-party resources
+
+mihomo v1.19.19 (unmodified upstream static Linux binaries)
+Copyright: mihomo / Clash.Meta contributors
+License: GNU GPL v3 (see licenses/mihomo.txt)
+Source and build instructions: https://github.com/MetaCubeX/mihomo/tree/v1.19.19
+Source archive: https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.19.tar.gz
+Release: https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.19
+
+Geodata: MetaCubeX/meta-rules-dat
+License: GNU GPL v3 (see licenses/meta-rules-dat.txt)
+Data revision and per-file SHA-256: manifest.json
+Sources, generation scripts and upstream dataset attribution:
+https://github.com/MetaCubeX/meta-rules-dat
+The GeoLite2 Country and ASN data incorporate GeoLite2 data created by MaxMind,
+available from https://www.maxmind.com (CC BY-SA 4.0).
+https://creativecommons.org/licenses/by-sa/4.0/
+
+These resources are separate upstream works. They are distributed unchanged.
+No resource is fetched automatically during installation, build, or default GEO setup.

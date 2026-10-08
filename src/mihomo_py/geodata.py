@@ -8,6 +8,7 @@ from pathlib import Path
 
 import maxminddb
 
+from .bundle import ASSET_ROOT
 from .errors import AppError
 
 # Filename aliases recognized by mihomo's constant/path.go.
@@ -94,7 +95,7 @@ def seed_geodata(root, destination, config):
         xdg = os.environ.get("XDG_CONFIG_HOME")
         if not core_home.exists() and xdg and Path(xdg).is_absolute():
             core_home = Path(xdg) / "mihomo"
-        sources = [root / "geodata", core_home]
+        sources = [root / "geodata", core_home, ASSET_ROOT / "geodata"]
     for path in destination.iterdir():
         kind = next(
             (kind for kind, aliases in ASSETS.items() if path.name.lower() in aliases), None
@@ -111,7 +112,7 @@ def seed_geodata(root, destination, config):
         available = {path.name.lower(): path for path in source.iterdir() if path.is_file()}
         for kind, aliases in ASSETS.items():
             # A subscription's custom datasets must not be replaced with unrelated defaults.
-            if custom.get(kind) or any(name in existing for name in aliases):
+            if (custom.get(kind) and not configured) or any(name in existing for name in aliases):
                 continue
             candidate = next(
                 (

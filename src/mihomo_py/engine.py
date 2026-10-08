@@ -15,6 +15,7 @@ import urllib.request
 from pathlib import Path
 
 from . import pidfd
+from .bundle import core_path
 from .config import parse, render
 from .errors import AppError
 from .geodata import check_geodata, geodata_transaction, seed_geodata
@@ -41,7 +42,7 @@ def process_identity(pid):
 
 
 class Engine:
-    def __init__(self, root, binary="mihomo", timeout=20):
+    def __init__(self, root, binary=None, timeout=20):
         self.root = root
         self.binary = binary
         self.timeout = timeout
@@ -51,13 +52,13 @@ class Engine:
 
     def executable(self):
         self.require_process_api()
-        binary = shutil.which(self.binary)
+        binary = shutil.which(self.binary) if self.binary else str(core_path())
         if not binary:
             raise AppError(
                 "core_missing",
                 "找不到 mihomo 内核。",
                 3,
-                "先安装 mihomo，或用 --core-binary /path/to/mihomo 指定路径。",
+                "检查 --core-binary / MIHOMO_PY_BINARY；省略时使用包内 mihomo。",
             )
         return str(Path(binary).resolve())
 
@@ -105,7 +106,7 @@ class Engine:
         copied = seed_geodata(self.root, data_dir, config)
         if progress:
             prefix = f"已复用 {len(copied)} 个地理数据文件，" if copied else "订阅已读取，"
-            progress(prefix + "正在校验配置（首次可能下载依赖）…")
+            progress(prefix + "正在校验配置…")
         fd, temporary = tempfile.mkstemp(prefix=".check-", suffix=".yaml", dir=self.root)
         try:
             with os.fdopen(fd, "w") as stream:
@@ -123,8 +124,8 @@ class Engine:
                 raise AppError(
                     "validation_timeout",
                     "订阅已读取，但内核配置校验超时；订阅尚未保存，原配置未替换。",
-                    suggestion="首次校验可能需要下载地理数据或规则。"
-                    "可通过 MIHOMO_PY_GEODATA_DIR 提供离线地理数据；"
+                    suggestion="默认地理数据已随包提供；检查订阅的自定义数据或规则源是否可达。"
+                    "可通过 MIHOMO_PY_GEODATA_DIR 提供自定义离线地理数据；"
                     f"详见 {self.root / 'validation.log'}。",
                     retryable=True,
                 ) from exc

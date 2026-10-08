@@ -1,5 +1,4 @@
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -9,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from mihomo_py.bundle import core_path
 from mihomo_py.manager import Manager
 
 MINIMAL = "proxies: []\nrules:\n  - MATCH,DIRECT\n"
@@ -32,7 +32,7 @@ def command(tmp_path):
                 "--data-dir",
                 str(tmp_path / "home"),
                 "--core-binary",
-                os.environ.get("MIHOMO_TEST_BINARY", "mihomo"),
+                os.environ.get("MIHOMO_TEST_BINARY", str(core_path())),
                 *args,
             ],
             input=input,
@@ -48,9 +48,7 @@ def command(tmp_path):
 
 @pytest.fixture
 def real_core(tmp_path):
-    binary = os.environ.get("MIHOMO_TEST_BINARY") or shutil.which("mihomo")
-    if not binary:
-        pytest.skip("真实内核验证未运行：未找到 mihomo")
+    binary = os.environ.get("MIHOMO_TEST_BINARY") or str(core_path())
     manager = Manager(tmp_path / "home", binary, timeout=5)
     proxy_port, controller_port = free_ports()
     with manager.store.lock():

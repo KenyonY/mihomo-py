@@ -147,6 +147,8 @@ def render(content, settings, secret):
             "mode": settings["mode"],
             "tun": {"enable": False},
             "authentication": [],
+            # The bundled snapshot must not trigger overseas downloads after bootstrap.
+            "geo-auto-update": False,
         }
     )
     dns = config.get("dns")

@@ -2,14 +2,14 @@
 
 面向 Linux 服务器的 mihomo CLI / TUI 客户端，支持订阅管理、节点切换和延迟测试、配置校验、独立本机设置及后台进程管理。
 
-需要 Python 3.11+、Linux（支持 pidfd 的内核，5.3+）和已有的 `mihomo` 可执行文件。支持系统 Python 和 Conda：Python 缺少原生 pidfd 接口时，在 x86_64 / aarch64 的 64 位环境下通过标准库 ctypes 调用相同的 Linux 系统接口，不需要编译器或切换 Python。其他架构需要 Python 原生 pidfd 接口；容器须允许这些系统调用。已用系统 Python 3.12.3、Conda Python 3.12.4、Textual 8.2.8、mihomo v1.19.19 验证（x86_64）。内核安装更新、systemd 和 TUN 是后续阶段。
+需要 Python 3.11+、Linux（支持 pidfd 的内核，5.3+），支持 x86_64 / aarch64。支持系统 Python 和 Conda：Python 缺少原生 pidfd 接口时，通过标准库 ctypes 调用相同的 Linux 系统接口，不需要编译器或切换 Python；容器须允许这些系统调用。已用系统 Python 3.12.3、Conda Python 3.12.4、Textual 8.2.8、mihomo v1.19.19 验证（x86_64）。发行包内置 mihomo 内核与默认地理数据库；systemd 和 TUN 是后续阶段。
 
 ## 安装与开始使用
 
-在当前 Python 环境（包括 Conda）中安装：
+发行包发布并同步到所用镜像后，在当前 Python 环境（包括 Conda）中安装：
 
 ```bash
-python -m pip install -e .
+python -m pip install mihomo-py
 mihomo-py
 ```
 
@@ -36,7 +36,9 @@ mihomo-py core logs --follow
 mihomo-py core stop
 ```
 
-内核不在 PATH 时，设置 `MIHOMO_PY_BINARY=/path/to/mihomo`，或使用全局选项 `--core-binary`。
+安装只需要可用的 pip 镜像源：内核和默认 GEO 数据已包含在 wheel / 源码发行包中，安装、构建和首次准备这些资源不访问 GitHub 或其他下载站。镜像需要同步本项目的发行包及 Python 依赖。默认使用包内内核；如需覆盖，设置 `MIHOMO_PY_BINARY=/path/to/mihomo` 或使用全局选项 `--core-binary`（显式传入 `mihomo` 才会查找 PATH）。
+
+远程订阅、自定义 `geox-url`、远程 rule/proxy providers 不属于内置资源，仍需可达或提前提供本地文件。默认 GEO 自动更新关闭，避免启动后触发外网更新。详见 [离线安装与发行](docs/packaging.md)。
 
 远程订阅支持 HTTP(S)。可以从 stdin 输入地址，避免把令牌放进命令历史：
 
@@ -110,9 +112,9 @@ core-data/        # 按订阅隔离的内核数据、provider 和节点选择缓
 
 本机设置默认代理端口 `7897`、管理端口 `9090`、路由模式 `rule`。模式可选 `rule/global/direct`。HTTP/SOCKS 共用代理端口，管理接口使用随机密钥；两者只监听本机。当前固定禁用订阅携带的其他入站端口、自定义 listeners/tunnels、TUN、DNS/DoH 监听、iptables 接管、NTP 与外部 UI，保留节点、代理组、规则、DNS 解析配置，并启用节点选择缓存。代理端口不启用用户名密码验证。后续阶段再提供显式的入站和网络接管配置。
 
-订阅原文不会被本机设置改写；更新后重新合成运行配置。下载默认直连，不使用 `HTTP_PROXY/HTTPS_PROXY`；上限 8 MiB、网络操作超时 20 秒。HTTPS 连接在 TCP 或 TLS 失败时尝试域名的其他地址，每个连接/握手阶段最多等待 5 秒，地址尝试共用 20 秒预算；始终校验证书与原始域名。订阅下载超时自动重试一次，并在 TUI 中提示。使用 `mihomo -t` 校验合成配置；内核校验可能下载规则或 GEO 数据，相关行为由订阅配置和 mihomo 决定。内核校验/启动超时可用全局 `--timeout 60` 调整。
+订阅原文不会被本机设置改写；更新后重新合成运行配置。下载默认直连，不使用 `HTTP_PROXY/HTTPS_PROXY`；上限 8 MiB、网络操作超时 20 秒。HTTPS 连接在 TCP 或 TLS 失败时尝试域名的其他地址，每个连接/握手阶段最多等待 5 秒，地址尝试共用 20 秒预算；始终校验证书与原始域名。订阅下载超时自动重试一次，并在 TUI 中提示。使用 `mihomo -t` 校验合成配置；默认 GEO 数据由包内资源提供；订阅自定义的数据和规则源仍可能触发下载。内核校验/启动超时可用全局 `--timeout 60` 调整。
 
-校验前会将缺少的地理数据库从本客户端的 `geodata/`、已有 mihomo 的数据目录（通常为 `~/.config/mihomo`）按此优先级复制到订阅目录。支持 MMDB（`Country.mmdb` / `geoip.db` / `geoip.metadb`）、`GeoIP.dat`、`GeoSite.dat`、`ASN.mmdb`，文件名不区分大小写。可用 `MIHOMO_PY_GEODATA_DIR=/path/to/geodata` 显式指定唯一来源。只复制这些数据库，不复制订阅、provider 或节点选择缓存；保留目标已有的有效文件，订阅中显式配置了 `geox-url` 的相应数据库不复用。没有可复用文件时仍由内核下载；MMDB/ASN 在复制前后检查可读性，DAT 内容由内核校验。校验失败会恢复原 GEO 文件。如果提示“订阅已读取，但内核配置校验超时”，说明订阅已下载，阻塞在校验或依赖下载，请查看 `validation.log`。
+校验前会将缺少的地理数据库从本客户端的 `geodata/`、已有 mihomo 的数据目录（通常为 `~/.config/mihomo`）、包内快照按此优先级复制到订阅目录。支持 MMDB（`country.mmdb` / `geoip.db` / `geoip.metadb`）、`geoip.dat`、`geosite.dat`、`ASN.mmdb`，文件名不区分大小写。可用 `MIHOMO_PY_GEODATA_DIR=/path/to/geodata` 显式指定唯一来源，也可用它提供自定义 `geox-url` 对应的离线数据。只复制这些数据库，不复制订阅、provider 或节点选择缓存；保留目标已有有效文件。订阅显式配置 `geox-url` 时，相应数据库不会被默认快照替代。空文件和无效 MMDB 会被剔除后重新准备，最终由真实内核校验。校验超时请查看 `validation.log`，并检查自定义资源是否可达。
 
 已有残缺 MMDB 的恢复、校验失败回滚和自定义来源隔离见 [地理数据说明](docs/geodata.md)。
 
@@ -154,8 +156,10 @@ ruff check .
 python -m build --installer uv
 ```
 
-真实内核测试在 PATH 中有 mihomo 时运行（也支持 `MIHOMO_TEST_BINARY`）；使用临时目录、空闲端口、直连规则和本地 HTTP 测速目标，不读取现有订阅，不访问机场服务，不改变现有代理。覆盖真实节点 API、选择持久化、TUI 订阅/内核/节点交互，以及 PTY 中的默认入口和退出。缺少内核则跳过并明确显示。
+真实内核测试默认使用包内 mihomo（也支持 `MIHOMO_TEST_BINARY`）；使用临时目录、空闲端口、直连规则和本地 HTTP 测速目标，不读取现有订阅，不访问机场服务，不改变现有代理。覆盖真实节点 API、选择持久化、TUI 订阅/内核/节点交互，以及 PTY 中的默认入口和退出。发行包验证必须运行真实内核测试。
 
 本地 TLS 下载回归测试需要 `openssl` 命令来生成临时测试证书；运行客户端本身无需此命令。
 
 配置字段参考 [mihomo 全局配置](https://wiki.metacubex.one/config/general/)。
+
+文档目录见 [docs/README.md](docs/README.md)。

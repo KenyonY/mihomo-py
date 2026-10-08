@@ -55,9 +55,8 @@ def default_directory():
 @click.option(
     "--core-binary",
     envvar="MIHOMO_PY_BINARY",
-    default="mihomo",
-    show_default=True,
-    help="已有的 mihomo 可执行文件。",
+    default=None,
+    help="指定 mihomo 可执行文件；默认使用安装包内的内核。",
 )
 @click.option(
     "--timeout",

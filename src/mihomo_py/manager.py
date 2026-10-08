@@ -8,7 +8,7 @@ from .store import Store
 
 
 class Manager:
-    def __init__(self, directory, binary="mihomo", timeout=20):
+    def __init__(self, directory, binary=None, timeout=20):
         self.store = Store(directory)
         self.engine = Engine(self.store.root, binary, timeout)
 
