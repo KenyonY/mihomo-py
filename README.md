@@ -1,8 +1,8 @@
 # mihomo-py
 
-面向 Linux 服务器的 mihomo CLI 客户端。第一阶段提供订阅管理、配置校验、独立本机设置和后台进程管理。
+面向 Linux 服务器的 mihomo CLI / TUI 客户端，支持订阅管理、节点切换和延迟测试、配置校验、独立本机设置及后台进程管理。
 
-需要 Python 3.11+（构建时启用 `os.pidfd_open` / `signal.pidfd_send_signal`）、Linux（支持 pidfd 的内核，5.3+）和已有的 `mihomo` 可执行文件。部分 Conda Python 构建缺少这些接口，请使用系统 Python。已用系统 Python 3.12.3、mihomo v1.19.19 验证。内核安装更新、节点操作、TUI、systemd 和 TUN 是后续阶段。
+需要 Python 3.11+（构建时启用 `os.pidfd_open` / `signal.pidfd_send_signal`）、Linux（支持 pidfd 的内核，5.3+）和已有的 `mihomo` 可执行文件。部分 Conda Python 构建缺少这些接口，请使用系统 Python。已用系统 Python 3.12.3、Textual 8.2.8、mihomo v1.19.19 验证。内核安装更新、systemd 和 TUN 是后续阶段。
 
 ## 安装与开始使用
 
@@ -10,6 +10,12 @@
 uv venv --python /usr/bin/python3
 uv pip install -e .
 source .venv/bin/activate
+mihomo-py                 # 进入 TUI，也可使用 mihomo-py tui
+```
+
+也可以使用子命令：
+
+```bash
 mihomo-py --help
 
 # 导入本地完整的 Clash/Mihomo YAML 配置
@@ -33,7 +39,21 @@ unset SUB_URL
 
 上例使用 zsh 的 `read` 语法；bash 可使用 `read -rs -p '订阅 URL: ' SUB_URL`。
 也可以直接 `mihomo-py sub add work 'https://example.com/sub?token=…'`。
-第一阶段支持完整 YAML 配置，不转换 Base64 节点列表或 `ss://` 等单节点链接。
+支持完整 YAML 配置，不转换 Base64 节点列表或 `ss://` 等单节点链接。
+
+## 终端界面
+
+在交互终端直接运行 `mihomo-py`，或显式执行 `mihomo-py tui`。建议终端至少 80×24，支持鼠标和键盘 Tab / Shift-Tab 导航。
+
+- **订阅**：添加 URL 或本地 YAML、选择缓存订阅、更新、更换来源、确认删除。添加后选择该行并按 Enter 使用，再点击「启动」。来源输入隐藏，列表里的远程地址脱敏。
+- **节点**：启动内核后选择代理组，按名称搜索；选中节点按 Enter 或点击「切换节点」。目前仅手动选择组（Selector）支持切换；其他组可查看和测试延迟。
+- **日志**：自动刷新最近 200 行。顶部提供启动、停止、重启及端口/模式设置。
+
+`Ctrl-R` 刷新，`Ctrl-A` 添加订阅（输入框内保留文本编辑快捷键），`q` / `Ctrl-Q` 退出，Esc 关闭弹窗。打开界面不会自动启动代理，退出界面会保留运行中的内核；正在保存或操作内核时需等操作完成再退出。后台状态每 2 秒刷新，网络请求和内核操作不会阻塞界面输入。
+
+延迟测试由用户手动触发，默认目标为 `https://www.gstatic.com/generate_204`，可在节点页修改；测试请求经所选节点发出。这是 HTTP 延迟测量，不是下载带宽测试。失败会显示错误，可更换目标或节点后重试。
+
+节点切换立即生效，无需重启；选择按订阅缓存，在内核重启后恢复。若从旧版升级且内核仍在运行，请先重启一次内核，使 `profile.store-selected` 设置生效。
 
 ## 命令
 
@@ -41,6 +61,7 @@ unset SUB_URL
 
 | 命令 | 行为 |
 |---|---|
+| `tui` | 打开交互终端界面 |
 | `sub add NAME SOURCE` | 读取来源、内核校验成功后保存；不会自动选择或启动 |
 | `sub list` | 显示当前选择、来源和更新时间；隐藏 URL 路径及令牌 |
 | `sub set NAME SOURCE` | 修改来源并刷新缓存；失败保留旧来源和配置 |
@@ -54,6 +75,9 @@ unset SUB_URL
 | `core stop` | 停止本实例；重复执行安全 |
 | `core status` | 显示 PID、健康状态、已选订阅、实际运行订阅和设置 |
 | `core logs [--lines 100] [--follow]` | 查看内核日志 |
+| `node list [--group GROUP]` | 列出代理组，或指定组的节点、选择和最近延迟 |
+| `node use NAME --group GROUP` | 按完整名称切换手动组节点，无需重启 |
+| `node test NAME [--url URL] [--timeout-ms 5000]` | 测量一个节点的 HTTP 延迟，默认超时 5 秒 |
 
 所有修改命令支持 `--dry-run`，输出 JSON 操作计划，退出码为 10。它不下载、不校验内核配置、不创建目录，因此只表示操作意图，不保证实际执行成功。终端删除会询问确认；管道中必须明确传入 `--yes`。
 
@@ -72,11 +96,11 @@ core-data/        # 按订阅隔离的内核数据、provider 和节点选择缓
 
 目录默认权限 0700；客户端写入的状态、配置和日志文件为 0600。缓存包含订阅凭证，列举订阅时仅展示脱敏地址。
 
-本机设置默认代理端口 `7897`、管理端口 `9090`、路由模式 `rule`。模式可选 `rule/global/direct`。HTTP/SOCKS 共用代理端口，管理接口使用随机密钥；两者只监听本机。第一阶段固定禁用订阅携带的其他入站端口、自定义 listeners/tunnels、TUN、DNS/DoH 监听、iptables 接管、NTP 与外部 UI，保留节点、代理组、规则、DNS 解析配置。代理端口不启用用户名密码验证。后续阶段再提供显式的入站和网络接管配置。
+本机设置默认代理端口 `7897`、管理端口 `9090`、路由模式 `rule`。模式可选 `rule/global/direct`。HTTP/SOCKS 共用代理端口，管理接口使用随机密钥；两者只监听本机。当前固定禁用订阅携带的其他入站端口、自定义 listeners/tunnels、TUN、DNS/DoH 监听、iptables 接管、NTP 与外部 UI，保留节点、代理组、规则、DNS 解析配置，并启用节点选择缓存。代理端口不启用用户名密码验证。后续阶段再提供显式的入站和网络接管配置。
 
 订阅原文不会被本机设置改写；更新后重新合成运行配置。下载默认直连，不使用 `HTTP_PROXY/HTTPS_PROXY`；上限 8 MiB、网络操作超时 20 秒。使用 `mihomo -t` 校验合成配置；内核校验可能下载规则或 GEO 数据，相关行为由订阅配置和 mihomo 决定。内核校验/启动超时可用全局 `--timeout 60` 调整。
 
-相对的 provider/规则/GEO 文件路径以对应的 `core-data/<订阅标识>/` 为基准，导入本地 YAML 不会复制其旁边的依赖文件。建议第一阶段使用内嵌节点/规则或远程 providers。`sub remove` 删除缓存原文和来源，但保留内核派生数据及历史日志，便于排错。
+相对的 provider/规则/GEO 文件路径以对应的 `core-data/<订阅标识>/` 为基准，导入本地 YAML 不会复制其旁边的依赖文件。建议使用内嵌节点/规则或远程 providers。`sub remove` 删除缓存原文和来源，但保留内核派生数据及历史日志，便于排错。
 
 运行中更新、切换订阅或修改本机设置会短暂中断连接：校验成功后重启；新实例启动失败时尝试恢复旧实例，失败则明确报告。状态文件在成功启动后提交；普通启动失败保留旧订阅记录。文件内容先 fsync，再通过 rename 原子替换；不承诺目录项在断电后的持久化。进程和文件无法形成跨资源原子事务，断电或强制终止仍可能使运行状态与选择不同；`core status` 分别展示两者，`core start` 重新应用已保存选择。
 
@@ -84,7 +108,7 @@ core-data/        # 按订阅隔离的内核数据、provider 和节点选择缓
 
 ## 脚本与错误处理
 
-交互终端默认表格/文本，管道默认 JSON；可显式 `--format table` 或 `--json`。数据写 stdout，结构化错误写 stderr；普通输出无 ANSI 色码。日志可能包含内核返回的地址，`core logs --follow` 在 JSON 模式下逐行输出 NDJSON。
+子命令在交互终端默认表格/文本，管道默认 JSON；可显式 `--format table` 或 `--json`。不带子命令时，交互终端进入 TUI，管道或显式指定输出格式时输出状态；`tui` 子命令要求交互终端。数据写 stdout，结构化错误写 stderr；普通子命令输出无 ANSI 色码。日志可能包含内核返回的地址，`core logs --follow` 在 JSON 模式下逐行输出 NDJSON。
 
 ```bash
 mihomo-py --json sub list
@@ -114,6 +138,6 @@ ruff check .
 python -m build --installer uv
 ```
 
-真实内核测试在 PATH 中有 mihomo 时运行（也支持 `MIHOMO_TEST_BINARY`）；使用临时目录、空闲端口及直连规则，不读取现有订阅，不访问机场服务，不改变现有代理。缺少内核则跳过并明确显示。
+真实内核测试在 PATH 中有 mihomo 时运行（也支持 `MIHOMO_TEST_BINARY`）；使用临时目录、空闲端口、直连规则和本地 HTTP 测速目标，不读取现有订阅，不访问机场服务，不改变现有代理。覆盖真实节点 API、选择持久化、TUI 订阅/内核/节点交互，以及 PTY 中的默认入口和退出。缺少内核则跳过并明确显示。
 
 配置字段参考 [mihomo 全局配置](https://wiki.metacubex.one/config/general/)。

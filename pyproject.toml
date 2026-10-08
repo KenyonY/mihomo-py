@@ -8,13 +8,13 @@ version = "0.1.0"
 description = "A subscription and process manager for mihomo on Linux servers"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["click>=8.1,<9", "PyYAML>=6,<7"]
+dependencies = ["click>=8.1,<9", "PyYAML>=6,<7", "textual>=8.2.8,<9"]
 
 [project.scripts]
 mihomo-py = "mihomo_py.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9", "ruff>=0.9,<1", "build>=1.2,<2", "uv>=0.7,<1"]
+dev = ["pytest>=8,<9", "pytest-asyncio>=1.4,<2", "ruff>=0.9,<1", "build>=1.2,<2", "uv>=0.7,<1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

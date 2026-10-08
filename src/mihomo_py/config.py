@@ -130,4 +130,8 @@ def render(content, settings, secret):
     dns = config.get("dns")
     if isinstance(dns, dict):
         dns.pop("listen", None)
+    profile = config.setdefault("profile", {})
+    if not isinstance(profile, dict):
+        raise AppError("invalid_config", "profile 必须是 YAML 对象。", 2)
+    profile["store-selected"] = True
     return yaml.safe_dump(config, allow_unicode=True, sort_keys=False)

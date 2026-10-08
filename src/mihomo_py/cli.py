@@ -9,6 +9,7 @@ import click
 
 from . import __version__
 from .config import check_name, normalize_source, source_label
+from .controller import DEFAULT_TEST_URL, Controller
 from .errors import AppError
 from .manager import Manager
 
@@ -18,7 +19,7 @@ def emit(data, fmt):
         click.echo(json.dumps(data, ensure_ascii=False))
     elif isinstance(data, list):
         if not data:
-            click.echo("暂无订阅。用 sub add 添加。")
+            click.echo("暂无记录。")
         else:
             columns = list(data[0])
             rows = [[str(row.get(key, "")) for key in columns] for row in data]
@@ -42,7 +43,7 @@ def default_directory():
     return str(base / "mihomo-py")
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.group(invoke_without_command=True, context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--data-dir",
     envvar="MIHOMO_PY_HOME",
@@ -72,7 +73,7 @@ def default_directory():
 @click.version_option(__version__)
 @click.pass_context
 def cli(ctx, data_dir, core_binary, timeout, fmt, json_output):
-    """管理服务器上的 mihomo 订阅与进程。
+    """管理服务器上的 mihomo 订阅、节点与进程；终端中直接运行进入 TUI。
 
     \b
     示例：mihomo-py sub add work ./config.yaml
@@ -88,6 +89,76 @@ def cli(ctx, data_dir, core_binary, timeout, fmt, json_output):
         "manager": Manager(data_dir, core_binary, timeout),
         "format": "json" if json_output else fmt or ("table" if sys.stdout.isatty() else "json"),
     }
+    if ctx.invoked_subcommand is None:
+        if sys.stdin.isatty() and sys.stdout.isatty() and not json_output and fmt is None:
+            launch_tui(ctx.obj["manager"])
+        else:
+            emit(ctx.obj["manager"].status(), ctx.obj["format"])
+
+
+def launch_tui(manager):
+    if not sys.stdin.isatty() or not sys.stdout.isatty() or os.environ.get("TERM") == "dumb":
+        raise AppError("terminal_required", "TUI 需要交互式终端。请使用子命令或 core status。", 2)
+    from .tui import MihomoApp
+
+    MihomoApp(manager).run()
+
+
+@cli.command("tui")
+@click.pass_context
+def tui_command(ctx):
+    """打开交互终端界面；退出界面不停止内核。"""
+    launch_tui(ctx.obj["manager"])
+
+
+@cli.group()
+def node():
+    """查看代理组、切换节点和测量延迟（内核须已运行）。"""
+
+
+@node.command("list")
+@click.option("--group", help="显示指定组的节点；省略时列出代理组。")
+@click.pass_context
+def node_list(ctx, group):
+    controller = Controller(ctx.obj["manager"].engine)
+    proxies = controller.proxies()
+    emit(
+        controller.members(proxies, group) if group else controller.groups(proxies),
+        ctx.obj["format"],
+    )
+
+
+@node.command("use")
+@click.argument("name")
+@click.option("--group", required=True, help="手动代理组的完整名称。")
+@click.option("--dry-run", is_flag=True)
+@click.pass_context
+def node_use(ctx, name, group, dry_run):
+    """按完整名称切换组内节点，无需重启内核。"""
+    mutate(
+        ctx,
+        "node.use",
+        {"group": group, "name": name},
+        dry_run,
+        lambda: Controller(ctx.obj["manager"].engine).select(group, name),
+    )
+
+
+@node.command("test")
+@click.argument("name")
+@click.option("--url", default=DEFAULT_TEST_URL, show_default=True)
+@click.option("--timeout-ms", type=click.IntRange(1, 30000), default=5000, show_default=True)
+@click.option("--dry-run", is_flag=True, help="仅输出测速计划，不发送测试请求。")
+@click.pass_context
+def node_test(ctx, name, url, timeout_ms, dry_run):
+    """测量一个节点到指定 URL 的延迟，不是带宽测速。"""
+    mutate(
+        ctx,
+        "node.test",
+        {"name": name, "timeout_ms": timeout_ms},
+        dry_run,
+        lambda: Controller(ctx.obj["manager"].engine).test(name, url, timeout_ms),
+    )
 
 
 def mutate(ctx, action, target, dry_run, operation):

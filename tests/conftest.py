@@ -4,6 +4,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -71,6 +72,13 @@ def http_source():
     state = {"content": MINIMAL.encode(), "status": 200, "requests": []}
 
     class Handler(BaseHTTPRequestHandler):
+        def do_HEAD(self):
+            state["requests"].append((self.path, self.headers.get("User-Agent")))
+            # mihomo treats sub-millisecond URL tests (delay == 0) as failures.
+            time.sleep(0.01)
+            self.send_response(state["status"])
+            self.end_headers()
+
         def do_GET(self):
             state["requests"].append((self.path, self.headers.get("User-Agent")))
             self.send_response(state["status"])
