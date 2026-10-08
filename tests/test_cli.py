@@ -244,10 +244,14 @@ def test_empty_or_relative_xdg_uses_home(command, tmp_path, xdg):
     assert not home.exists()
 
 
-def test_unsupported_python_is_rejected_before_start(tmp_path, monkeypatch):
+def test_unsupported_kernel_is_rejected_before_start(tmp_path, monkeypatch):
+    from mihomo_py import pidfd
     from mihomo_py.engine import Engine
 
-    monkeypatch.delattr(os, "pidfd_open")
+    def unavailable(pid):
+        raise OSError(38, "Function not implemented")
+
+    monkeypatch.setattr(pidfd, "open_pidfd", unavailable)
     with pytest.raises(AppError, match="pidfd"):
         Engine(tmp_path).executable()
     assert not list(tmp_path.iterdir())

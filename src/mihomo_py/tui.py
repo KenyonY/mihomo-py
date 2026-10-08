@@ -8,11 +8,11 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.theme import Theme
 from textual.widgets import (
     Button,
     DataTable,
     Footer,
-    Header,
     Input,
     Select,
     Static,
@@ -92,33 +92,90 @@ class MihomoApp(App):
         Binding("ctrl+a", "add", "添加订阅"),
     ]
     CSS = """
-    Screen { background: $surface; }
-    #status { height: 3; padding: 0 1; background: $boost; }
-    .buttons { height: 3; }
-    .buttons Button { min-width: 9; margin-right: 1; padding: 0 1; }
-    #controls { padding: 0 1; }
-    TabbedContent { height: 1fr; }
-    TabPane { padding: 0 1; }
-    DataTable { height: 1fr; min-height: 3; }
-    .hint { height: auto; max-height: 2; color: $text-muted; }
-    #message { height: auto; max-height: 3; padding: 0 1; background: $boost; }
-    #group, #filter, #test-url { height: 3; }
+    Screen { background: $background; color: $foreground; }
+    #masthead { height: 2; padding: 0 2; }
+    #brand { width: 1fr; color: $accent; text-style: bold; }
+    #edition { width: auto; color: $text-muted; }
+    #overview { height: 4; margin: 0 2; border: round #303c50; padding: 0 1; }
+    .metric { width: 1fr; height: 2; }
+    #subscription-metric { width: 2fr; }
+    .metric-label { height: 1; color: $text-muted; }
+    .metric-value { height: 1; text-style: bold; }
+    #status { color: $text-muted; }
+    #status.online { color: $success; }
+    #status.pending { color: $warning; }
+    .buttons { height: 1; }
+    Button { height: 1; min-width: 8; min-height: 1; border: none;
+             padding: 0 1; margin-right: 1; background: $surface; color: $foreground; }
+    Button:hover { background: #2b3a50; }
+    Button:focus { background: #34465e; text-style: bold; }
+    Button.-primary, Button.-success { background: $accent; color: $background; }
+    Button.-error { background: $surface; color: $error; }
+    Button:disabled { background: $background; color: #536176; text-opacity: 100%; }
+    #controls { margin: 0 2; }
+    TabbedContent { height: 1fr; margin: 0 2; }
+    Tabs { height: 2; }
+    Tab { padding: 0 2; color: $text-muted; }
+    Tab.-active { color: $accent; text-style: bold; }
+    Underline > .underline--bar { color: $accent; background: #303c50; }
+    ContentSwitcher { height: 1fr; }
+    TabPane { padding: 0 1; border: round #303c50; }
+    DataTable { height: 1fr; min-height: 3; background: $background; }
+    DataTable > .datatable--header { background: $surface; color: #99aac2;
+                                   text-style: not bold; }
+    DataTable > .datatable--odd-row { background: #131d2d; }
+    DataTable > .datatable--even-row { background: $background; }
+    DataTable > .datatable--cursor { background: #243d50; color: #e4f5f3; }
+    DataTable:focus > .datatable--cursor { background: #264a5b; color: #ffffff; }
+    .hint { height: 1; color: $text-muted; margin-bottom: 1; }
+    .empty { height: 1fr; min-height: 3; content-align: center middle;
+             color: $text-muted; text-align: center; }
+    .list-area { height: 1fr; }
+    #message { height: auto; max-height: 3; margin: 0 2; color: $text-muted; }
+    #message.error { color: $error; }
+    #message.success { color: $success; }
     #node-filters { height: 3; }
-    #node-filters Select { width: 1fr; }
+    #node-filters Select { width: 1fr; margin-right: 1; }
     #node-filters Input { width: 1fr; }
-    #group-hint { height: 1; }
-    #log-text { height: auto; }
+    Input { background: $surface; border: tall #303c50; }
+    Input:focus { border: tall $accent; }
+    SelectCurrent { background: $surface; border: tall #303c50; }
+    #group-hint { height: 1; color: $text-muted; }
+    #test-tools { height: 1; margin-top: 1; }
+    #test-label { width: 7; color: $text-muted; }
+    #test-url { width: 1fr; height: 1; border: none; padding: 0 1; }
+    #test-url:focus { border: none; background: #243d50; }
+    #log-text { height: auto; color: #99aac2; }
     #log-scroll { height: 1fr; }
-    Form { align: center middle; background: $background 70%; }
+    Footer { background: $surface; padding: 0 2; }
+    Form { align: center middle; background: $background 75%; }
     #dialog { width: 64; max-width: 95%; height: auto; max-height: 90%;
-              padding: 1 2; border: thick $accent; background: $surface; }
-    .dialog-title { text-style: bold; margin-bottom: 1; }
+              padding: 1 2; border: round $accent; background: $surface; }
+    .dialog-title { text-style: bold; color: $accent; margin-bottom: 1; }
     #form-fields { height: 1fr; }
     #form-error { height: auto; max-height: 3; color: $error; margin: 1 0; }
     """
 
     def __init__(self, manager):
         super().__init__()
+        self.register_theme(
+            Theme(
+                name="mihomo-night",
+                primary="#68d5c3",
+                accent="#68d5c3",
+                secondary="#8ca9df",
+                background="#101826",
+                surface="#1a2638",
+                panel="#1a2638",
+                foreground="#d9e2ef",
+                success="#83d9a6",
+                warning="#e7bf76",
+                error="#ed929f",
+                dark=True,
+                variables={"footer-key-foreground": "#68d5c3", "footer-background": "#1a2638"},
+            )
+        )
+        self.theme = "mihomo-night"
         self.manager = manager
         self.busy = False
         self.reading = False
@@ -131,8 +188,22 @@ class MihomoApp(App):
         self.delay_results = {}
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        yield Static("正在读取状态…", id="status", markup=False)
+        with Horizontal(id="masthead"):
+            yield Static("◈  mihomo", id="brand")
+            yield Static("服务器代理管理 / mihomo-py", id="edition")
+        with Horizontal(id="overview"):
+            with Vertical(classes="metric"):
+                yield Static("内核", classes="metric-label")
+                yield Static("○  读取中", id="status", classes="metric-value", markup=False)
+            with Vertical(id="subscription-metric", classes="metric"):
+                yield Static("订阅 · 已选 / 运行", classes="metric-label")
+                yield Static("—", id="subscription-value", classes="metric-value", markup=False)
+            with Vertical(classes="metric"):
+                yield Static("本机代理", classes="metric-label")
+                yield Static("—", id="proxy-value", classes="metric-value")
+            with Vertical(classes="metric"):
+                yield Static("路由模式", classes="metric-label")
+                yield Static("—", id="mode-value", classes="metric-value")
         with Horizontal(id="controls", classes="buttons"):
             yield Button("启动", id="start", variant="success")
             yield Button("停止", id="stop", variant="error")
@@ -141,10 +212,14 @@ class MihomoApp(App):
             yield Button("刷新", id="refresh")
         with TabbedContent():
             with TabPane("订阅", id="subscriptions"):
-                yield Static(
-                    "↑↓ 选择 · Enter 使用缓存订阅 · 添加支持 URL 或本地 YAML", classes="hint"
-                )
-                yield DataTable(id="subs", cursor_type="row", zebra_stripes=True)
+                yield Static("订阅库   /   ↑↓ 选择，Enter 使用", id="sub-hint", classes="hint")
+                with Vertical(classes="list-area"):
+                    yield DataTable(id="subs", cursor_type="row", zebra_stripes=True)
+                    yield Static(
+                        "还没有订阅\n\n添加订阅 URL 或本地 YAML，开始配置代理\n\nCtrl+A 添加订阅",
+                        id="sub-empty",
+                        classes="empty",
+                    )
                 with Horizontal(classes="buttons"):
                     yield Button("添加", id="add")
                     yield Button("使用", id="use", variant="primary")
@@ -156,11 +231,20 @@ class MihomoApp(App):
                     yield Select([], prompt="选择代理组", id="group")
                     yield Input(placeholder="搜索节点名称", id="filter")
                 yield Static("启动内核后显示节点", id="group-hint", markup=False)
-                yield DataTable(id="node-table", cursor_type="row", zebra_stripes=True)
+                with Vertical(classes="list-area"):
+                    yield DataTable(id="node-table", cursor_type="row", zebra_stripes=True)
+                    yield Static(
+                        "选择订阅并启动内核后，即可查看节点",
+                        id="node-empty",
+                        classes="empty",
+                        markup=False,
+                    )
                 with Horizontal(classes="buttons"):
                     yield Button("切换节点", id="select-node", variant="primary")
                     yield Button("测试延迟", id="test-node")
-                yield Input(value=DEFAULT_TEST_URL, placeholder="延迟测试 URL", id="test-url")
+                with Horizontal(id="test-tools"):
+                    yield Static("目标", id="test-label")
+                    yield Input(value=DEFAULT_TEST_URL, placeholder="延迟测试 URL", id="test-url")
             with TabPane("日志", id="logs"):
                 yield Static("最近 200 行 · 自动刷新 · 可能含订阅内部地址", classes="hint")
                 with VerticalScroll(id="log-scroll"):
@@ -169,8 +253,16 @@ class MihomoApp(App):
         yield Footer()
 
     def on_mount(self):
-        self.query_one("#subs", DataTable).add_columns("当前", "订阅", "来源", "更新时间")
-        self.query_one("#node-table", DataTable).add_columns("当前", "节点", "类型", "延迟")
+        table = self.query_one("#subs", DataTable)
+        table.add_column("", width=2)
+        table.add_column("订阅", width=16)
+        table.add_column("来源", width=26)
+        table.add_column("更新于", width=16)
+        table = self.query_one("#node-table", DataTable)
+        table.add_column("", width=2)
+        table.add_column("节点", width=32)
+        table.add_column("类型", width=12)
+        table.add_column("延迟", width=10)
         self.query_one("#subs", DataTable).focus()
         self.action_refresh()
         self.set_interval(2, self.action_refresh)
@@ -238,12 +330,23 @@ class MihomoApp(App):
             else "已停止"
         )
         settings = status["running_settings"] or status["settings"]
-        self.query_one("#status", Static).update(
-            f"{state}   已选订阅：{status['selected'] or '无'}   "
-            f"运行订阅：{status['running_subscription'] or '无'}\n"
-            f"代理 127.0.0.1:{settings['proxy_port']}   模式 {settings['mode']}   "
-            f"PID {status['pid'] or '—'}"
+        status_widget = self.query_one("#status", Static)
+        status_widget.update(f"{'●' if status['running'] else '○'}  {state}")
+        status_widget.set_class(status["healthy"], "online")
+        status_widget.set_class(status["running"] and not status["healthy"], "pending")
+        status_widget.tooltip = f"PID {status['pid'] or '—'}"
+        selected, running = status["selected"] or "—", status["running_subscription"] or "—"
+        subscription = selected if selected == running else f"{selected} / {running}"
+        self.query_one("#subscription-value", Static).update(subscription)
+        self.query_one("#subscription-value").tooltip = f"已选：{selected} · 运行：{running}"
+        self.query_one("#proxy-value", Static).update(f":{settings['proxy_port']}")
+        self.query_one("#proxy-value").tooltip = f"127.0.0.1:{settings['proxy_port']}"
+        self.query_one("#mode-value", Static).update(settings["mode"].upper())
+        self.query_one("#sub-hint", Static).update(
+            f"订阅库 · {len(snapshot['subs'])} 项   /   ↑↓ 选择，Enter 使用"
         )
+        self.query_one("#subs").display = bool(snapshot["subs"])
+        self.query_one("#sub-empty").display = not snapshot["subs"]
         if not previous or previous["subs"] != snapshot["subs"]:
             table = self.query_one("#subs", DataTable)
             selected = self.current_sub()
@@ -257,7 +360,7 @@ class MihomoApp(App):
                             "●" if sub["selected"] else "",
                             sub["name"],
                             sub["source"],
-                            sub["updated_at"],
+                            sub["updated_at"][:16].replace("T", " "),
                         )
                     ],
                     key=sub["name"],
@@ -297,7 +400,13 @@ class MihomoApp(App):
         self.node_names = []
         hint = self.query_one("#group-hint", Static)
         if self.group_name not in proxies:
-            hint.update(self.snapshot["api_error"] or "启动内核后显示节点")
+            hint.update("节点列表")
+            table.display = False
+            empty = self.query_one("#node-empty", Static)
+            empty.display = True
+            empty.update(
+                self.snapshot["api_error"] or "暂无可用代理组\n\n选择订阅并启动内核后，即可查看节点"
+            )
             return
         group = proxies[self.group_name]
         hint.update(f"{group['type']} · 当前：{group.get('now') or '自动'} · Enter 切换手动组")
@@ -319,6 +428,10 @@ class MihomoApp(App):
                 ],
                 key=node["name"],
             )
+        table.display = bool(self.node_names)
+        empty = self.query_one("#node-empty", Static)
+        empty.display = not self.node_names
+        empty.update("没有匹配的节点\n\n试试其他名称，或清空搜索条件")
         if previous_node in self.node_names:
             table.move_cursor(row=self.node_names.index(previous_node))
 
@@ -350,6 +463,7 @@ class MihomoApp(App):
         message = error_message(error)
         self.last_error = message
         self.query_one("#message", Static).update(message)
+        self.query_one("#message").set_classes("error")
         if isinstance(self.screen, Form):
             self.screen.query_one("#form-error", Static).update(message)
 
@@ -359,6 +473,7 @@ class MihomoApp(App):
         self.busy = True
         self.revision += 1
         self.last_error = None
+        self.query_one("#message").set_classes("")
         self.query_one("#message", Static).update(f"{label}…")
         self.update_buttons()
         self.run_worker(self.run_operation(label, operation, form), group="operation")
@@ -378,6 +493,7 @@ class MihomoApp(App):
             if form:
                 form.dismiss()
             self.query_one("#message", Static).update(message)
+            self.query_one("#message").set_classes("success")
         except Exception as error:
             self.show_error(error)
         finally:
@@ -402,7 +518,7 @@ class MihomoApp(App):
                 "添加订阅",
                 [
                     ("sub-name", "订阅名称", "", False),
-                    ("sub-source", "订阅 URL 或本地 YAML 路径（隐藏输入）", "", True),
+                    ("sub-source", "订阅 URL 或本地 YAML 路径", "", False),
                 ],
                 lambda values, form: self.operate(
                     "添加订阅",
@@ -471,7 +587,7 @@ class MihomoApp(App):
                 Form(
                     f"修改来源：{name}",
                     [
-                        ("sub-source", "新的 URL 或本地 YAML 路径（隐藏输入）", "", True),
+                        ("sub-source", "新的 URL 或本地 YAML 路径", "", False),
                     ],
                     lambda values, form: self.operate(
                         "修改来源",

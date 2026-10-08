@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from . import pidfd
 from .config import render
 from .errors import AppError
 from .store import atomic_write, valid_settings
@@ -61,20 +62,21 @@ class Engine:
 
     @staticmethod
     def require_process_api():
-        if sys.platform != "linux" or not all(
-            (hasattr(os, "pidfd_open"), hasattr(signal, "pidfd_send_signal"))
-        ):
-            raise AppError(
-                "unsupported_python",
-                "当前 Python 未提供 Linux pidfd 进程控制接口。",
-                suggestion="使用系统 Python 3.11+ 创建虚拟环境后安装；部分 Conda 构建不支持。",
-            )
+        if sys.platform != "linux":
+            raise AppError("unsupported_platform", "进程管理需要支持 pidfd 的 Linux 环境。")
         try:
-            descriptor = os.pidfd_open(os.getpid())
-            os.close(descriptor)
+            descriptor = pidfd.open_pidfd(os.getpid())
+            try:
+                # Signal 0 checks availability/permissions without delivering a signal.
+                pidfd.send_signal(descriptor, 0)
+            finally:
+                os.close(descriptor)
         except OSError as exc:
             raise AppError(
-                "unsupported_platform", "当前 Linux 环境不支持 pidfd 进程控制。"
+                "unsupported_platform",
+                f"当前系统无法使用 pidfd 进程控制（errno={exc.errno}）。",
+                suggestion="需要 Linux 5.3+ 且容器允许 pidfd 系统调用；"
+                "Python 缺少原生接口时，兼容层支持 x86_64/aarch64 64 位环境。",
             ) from exc
 
     def data_dir(self, name):
@@ -155,17 +157,17 @@ class Engine:
             return False
         self.require_process_api()
         try:
-            fd = os.pidfd_open(record["pid"])
+            fd = pidfd.open_pidfd(record["pid"])
         except ProcessLookupError:
             return False
         try:
             if process_identity(record["pid"]) != record["identity"]:
                 return False
-            signal.pidfd_send_signal(fd, signal.SIGTERM)
+            pidfd.send_signal(fd, signal.SIGTERM)
             poller = select.poll()
             poller.register(fd, select.POLLIN)
             if not poller.poll(5000):
-                signal.pidfd_send_signal(fd, signal.SIGKILL)
+                pidfd.send_signal(fd, signal.SIGKILL)
                 if not poller.poll(3000):
                     raise AppError("stop_failed", "内核尚未退出，请检查进程状态。")
         except ProcessLookupError:

@@ -24,6 +24,8 @@ async def test_empty_ui_keyboard_and_modal_cancel(tmp_path):
     async with app.run_test(size=(80, 24)) as pilot:
         await settled(app, pilot)
         assert app.snapshot["status"]["running"] is False
+        assert app.query_one("#sub-empty").display
+        assert not app.query_one("#subs").display
         assert not (tmp_path / "home").exists()
         await pilot.press("ctrl+a")
         await pilot.press("w", "o", "r", "k", "q")
@@ -46,7 +48,7 @@ async def test_real_ui_subscription_lifecycle(real_core, source):
         await pilot.click("#add")
         await pilot.press("w", "o", "r", "k", "tab")
         await pilot.press(*str(source))
-        assert app.screen.query_one("#sub-source", Input).password
+        assert not app.screen.query_one("#sub-source", Input).password
         await pilot.click("#form-submit")
         await settled(app, pilot)
         assert not isinstance(app.screen, Form)
@@ -54,6 +56,11 @@ async def test_real_ui_subscription_lifecycle(real_core, source):
         app.action_refresh()
         await settled(app, pilot)
         assert app.sub_names == ["work"]
+        assert app.query_one("#subs").display
+        assert not app.query_one("#sub-empty").display
+        await pilot.click("#edit")
+        assert not app.screen.query_one("#sub-source", Input).password
+        await pilot.press("escape")
         app.query_one("#subs", DataTable).focus()
         await pilot.press("enter")
         await settled(app, pilot)
@@ -115,6 +122,7 @@ rules: ["MATCH,DIRECT"]
         app.query_one(TabbedContent).active = "nodes"
         await pilot.pause()
         assert app.group_name == "代理 [group]"
+        assert app.query_one("#node-table").region.height >= 4
         await pilot.click("#filter")
         await pilot.press("R", "E", "J")
         assert app.node_names == ["REJECT"]

@@ -2,9 +2,18 @@
 
 面向 Linux 服务器的 mihomo CLI / TUI 客户端，支持订阅管理、节点切换和延迟测试、配置校验、独立本机设置及后台进程管理。
 
-需要 Python 3.11+（构建时启用 `os.pidfd_open` / `signal.pidfd_send_signal`）、Linux（支持 pidfd 的内核，5.3+）和已有的 `mihomo` 可执行文件。部分 Conda Python 构建缺少这些接口，请使用系统 Python。已用系统 Python 3.12.3、Textual 8.2.8、mihomo v1.19.19 验证。内核安装更新、systemd 和 TUN 是后续阶段。
+需要 Python 3.11+、Linux（支持 pidfd 的内核，5.3+）和已有的 `mihomo` 可执行文件。支持系统 Python 和 Conda：Python 缺少原生 pidfd 接口时，在 x86_64 / aarch64 的 64 位环境下通过标准库 ctypes 调用相同的 Linux 系统接口，不需要编译器或切换 Python。其他架构需要 Python 原生 pidfd 接口；容器须允许这些系统调用。已用系统 Python 3.12.3、Conda Python 3.12.4、Textual 8.2.8、mihomo v1.19.19 验证（x86_64）。内核安装更新、systemd 和 TUN 是后续阶段。
 
 ## 安装与开始使用
+
+在当前 Python 环境（包括 Conda）中安装：
+
+```bash
+python -m pip install -e .
+mihomo-py
+```
+
+或使用独立虚拟环境：
 
 ```bash
 uv venv --python /usr/bin/python3
@@ -43,9 +52,9 @@ unset SUB_URL
 
 ## 终端界面
 
-在交互终端直接运行 `mihomo-py`，或显式执行 `mihomo-py tui`。建议终端至少 80×24，支持鼠标和键盘 Tab / Shift-Tab 导航。
+在交互终端直接运行 `mihomo-py`，或显式执行 `mihomo-py tui`。采用深色紧凑布局、顶部状态分区和单行操作栏；尊重 `NO_COLOR` 设置。建议终端至少 80×24，支持鼠标和键盘 Tab / Shift-Tab 导航。
 
-- **订阅**：添加 URL 或本地 YAML、选择缓存订阅、更新、更换来源、确认删除。添加后选择该行并按 Enter 使用，再点击「启动」。来源输入隐藏，列表里的远程地址脱敏。
+- **订阅**：添加 URL 或本地 YAML、选择缓存订阅、更新、更换来源、确认删除。添加后选择该行并按 Enter 使用，再点击「启动」。来源明文输入，便于检查和编辑；列表里的远程地址仍脱敏。
 - **节点**：启动内核后选择代理组，按名称搜索；选中节点按 Enter 或点击「切换节点」。目前仅手动选择组（Selector）支持切换；其他组可查看和测试延迟。
 - **日志**：自动刷新最近 200 行。顶部提供启动、停止、重启及端口/模式设置。
 
