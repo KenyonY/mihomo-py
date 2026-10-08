@@ -96,3 +96,16 @@ def http_source():
     server.shutdown()
     server.server_close()
     thread.join()
+
+
+@pytest.fixture
+def mmdb_bytes():
+    # Empty MaxMind database, verified with maxminddb and real mihomo -t.
+    return bytes.fromhex(
+        "00000000000000000000000000000000abcdef4d61784d696e642e636f6de94a6e6f64"
+        "655f636f756e74c04b7265636f72645f73697a65c1184a69705f76657273696f6ec104"
+        "4d64617461626173655f747970654474657374496c616e67756167657300045b62696e"
+        "6172795f666f726d61745f6d616a6f725f76657273696f6ec1025b62696e6172795f66"
+        "6f726d61745f6d696e6f725f76657273696f6ec04b6275696c645f65706f6368c1014b"
+        "6465736372697074696f6ee0"
+    )

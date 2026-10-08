@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A subscription and process manager for mihomo on Linux servers"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["click>=8.1,<9", "PyYAML>=6,<7", "textual>=8.2.8,<9"]
+dependencies = ["click>=8.1,<9", "PyYAML>=6,<7", "textual>=8.2.8,<9", "maxminddb>=3,<4"]
 
 [project.scripts]
 mihomo-py = "mihomo_py.cli:main"

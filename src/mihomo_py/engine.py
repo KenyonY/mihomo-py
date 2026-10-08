@@ -17,7 +17,7 @@ from pathlib import Path
 from . import pidfd
 from .config import parse, render
 from .errors import AppError
-from .geodata import seed_geodata
+from .geodata import check_geodata, geodata_transaction, seed_geodata
 from .store import atomic_write, valid_settings
 
 
@@ -80,9 +80,13 @@ class Engine:
                 "Python 缺少原生接口时，兼容层支持 x86_64/aarch64 64 位环境。",
             ) from exc
 
-    def data_dir(self, name):
+    def data_dir(self, name, config=None):
         # Providers and selector caches from different subscriptions must not collide.
-        key = hashlib.sha256(name.encode()).hexdigest()[:16]
+        custom = (config or {}).get("geox-url") or {}
+        identity = name
+        if custom:
+            identity += "\0" + json.dumps(custom, sort_keys=True)
+        key = hashlib.sha256(identity.encode()).hexdigest()[:16]
         directory = self.root / "core-data" / key
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         return directory
@@ -90,10 +94,15 @@ class Engine:
     def validate(self, content, settings, name, *, progress=None):
         binary = self.executable()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        data_dir = self.data_dir(name)
+        config = parse(content)
+        data_dir = self.data_dir(name, config)
+        with geodata_transaction(data_dir):
+            self._validate(content, settings, binary, data_dir, config, progress)
+
+    def _validate(self, content, settings, binary, data_dir, config, progress):
         if progress:
             progress("订阅已读取，正在准备地理数据…")
-        copied = seed_geodata(self.root, data_dir, parse(content))
+        copied = seed_geodata(self.root, data_dir, config)
         if progress:
             prefix = f"已复用 {len(copied)} 个地理数据文件，" if copied else "订阅已读取，"
             progress(prefix + "正在校验配置（首次可能下载依赖）…")
@@ -128,6 +137,15 @@ class Engine:
                     2,
                     f"查看本地诊断文件：{self.root / 'validation.log'}",
                 )
+            # mihomo can exit successfully after downloading an invalid MMDB.
+            try:
+                check_geodata(data_dir)
+            except AppError as exc:
+                atomic_write(
+                    self.root / "validation.log",
+                    result.stdout.decode(errors="replace") + "\n" + str(exc),
+                )
+                raise
         finally:
             Path(temporary).unlink(missing_ok=True)
 
@@ -235,10 +253,10 @@ class Engine:
         except (OSError, urllib.error.URLError, ValueError):
             return False
 
-    def launch(self, compiled, name, settings, digest, secret):
+    def launch(self, compiled, name, settings, digest, secret, *, data_directory=None):
         self.check_ports(settings)
         binary = self.executable()
-        data_dir = str(self.data_dir(name))
+        data_dir = str(data_directory or self.data_dir(name, parse(compiled)))
         atomic_write(self.runtime_path, compiled)
         command = [binary, "-d", data_dir, "-f", str(self.runtime_path)]
         log_fd = os.open(self.log_path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
@@ -317,6 +335,7 @@ class Engine:
                         old["settings"],
                         old["fingerprint"],
                         old["secret"],
+                        data_directory=old["data_dir"],
                     )
                 except Exception as rollback:
                     raise AppError(

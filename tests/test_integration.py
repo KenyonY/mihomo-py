@@ -106,11 +106,11 @@ def test_failed_start_restores_real_previous_process(real_core, source, monkeypa
     original = real_core.engine.launch
     calls = []
 
-    def fail_once(*args):
+    def fail_once(*args, **kwargs):
         calls.append(args)
         if len(calls) == 1:
             raise AppError("start_failed", "Injected launch failure")
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(real_core.engine, "launch", fail_once)
     with pytest.raises(AppError, match="Injected"):

@@ -71,6 +71,7 @@ class Manager:
                     running["settings"],
                     running["fingerprint"],
                     running["secret"],
+                    data_directory=running["data_dir"],
                 )
             raise
 

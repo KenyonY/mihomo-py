@@ -112,7 +112,9 @@ core-data/        # 按订阅隔离的内核数据、provider 和节点选择缓
 
 订阅原文不会被本机设置改写；更新后重新合成运行配置。下载默认直连，不使用 `HTTP_PROXY/HTTPS_PROXY`；上限 8 MiB、网络操作超时 20 秒。HTTPS 连接在 TCP 或 TLS 失败时尝试域名的其他地址，每个连接/握手阶段最多等待 5 秒，地址尝试共用 20 秒预算；始终校验证书与原始域名。订阅下载超时自动重试一次，并在 TUI 中提示。使用 `mihomo -t` 校验合成配置；内核校验可能下载规则或 GEO 数据，相关行为由订阅配置和 mihomo 决定。内核校验/启动超时可用全局 `--timeout 60` 调整。
 
-校验前会将缺少的地理数据库从本客户端的 `geodata/`、已有 mihomo 的数据目录（通常为 `~/.config/mihomo`）按此优先级复制到订阅目录。支持 MMDB（`Country.mmdb` / `geoip.db` / `geoip.metadb`）、`GeoIP.dat`、`GeoSite.dat`、`ASN.mmdb`，文件名不区分大小写。可用 `MIHOMO_PY_GEODATA_DIR=/path/to/geodata` 显式指定唯一来源。只复制这些数据库，不复制订阅、provider 或节点选择缓存；保留目标已有文件，订阅中显式配置了 `geox-url` 的相应数据库不复用。没有可复用文件时仍由内核下载；数据库有效性由内核校验。如果提示“订阅已读取，但内核配置校验超时”，说明订阅已下载，阻塞在校验或依赖下载，请查看 `validation.log`。
+校验前会将缺少的地理数据库从本客户端的 `geodata/`、已有 mihomo 的数据目录（通常为 `~/.config/mihomo`）按此优先级复制到订阅目录。支持 MMDB（`Country.mmdb` / `geoip.db` / `geoip.metadb`）、`GeoIP.dat`、`GeoSite.dat`、`ASN.mmdb`，文件名不区分大小写。可用 `MIHOMO_PY_GEODATA_DIR=/path/to/geodata` 显式指定唯一来源。只复制这些数据库，不复制订阅、provider 或节点选择缓存；保留目标已有的有效文件，订阅中显式配置了 `geox-url` 的相应数据库不复用。没有可复用文件时仍由内核下载；MMDB/ASN 在复制前后检查可读性，DAT 内容由内核校验。校验失败会恢复原 GEO 文件。如果提示“订阅已读取，但内核配置校验超时”，说明订阅已下载，阻塞在校验或依赖下载，请查看 `validation.log`。
+
+已有残缺 MMDB 的恢复、校验失败回滚和自定义来源隔离见 [地理数据说明](docs/geodata.md)。
 
 相对的 provider/规则/GEO 文件路径以对应的 `core-data/<订阅标识>/` 为基准，导入本地 YAML 不会复制其旁边的依赖文件。建议使用内嵌节点/规则或远程 providers。`sub remove` 删除缓存原文和来源，但保留内核派生数据及历史日志，便于排错。
 
