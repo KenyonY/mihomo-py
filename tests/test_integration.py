@@ -229,3 +229,25 @@ def test_state_save_failure_restores_running_previous_process(real_core, source,
     restored = real_core.status()
     assert restored["healthy"]
     assert restored["running_settings"] == restored["settings"] == before["settings"]
+
+
+def test_start_waits_for_complete_process_identity(real_core, source, monkeypatch):
+    import mihomo_py.engine as engine_module
+
+    original = engine_module.process_identity
+    first = True
+
+    def transient(pid):
+        nonlocal first
+        identity = original(pid)
+        if first and identity:
+            first = False
+            return {**identity, "cmdline": []}
+        return identity
+
+    real_core.put_sub("test", str(source), create=True)
+    real_core.use("test")
+    monkeypatch.setattr(engine_module, "process_identity", transient)
+    status = real_core.start()
+    assert status["running"] and status["healthy"]
+    assert real_core.engine.stop()

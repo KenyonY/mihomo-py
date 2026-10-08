@@ -7,6 +7,7 @@ from pathlib import Path
 
 import yaml
 
+from .download import SubscriptionHTTPSHandler
 from .errors import AppError
 
 MAX_BYTES = 8 * 1024 * 1024
@@ -44,11 +45,24 @@ def source_label(source):
     return source
 
 
-def fetch(source):
+def fetch(source, *, progress=None):
+    try:
+        return _fetch_once(source)
+    except AppError as exc:
+        if exc.kind != "download_timeout" or not source.startswith(("http://", "https://")):
+            raise
+        if progress:
+            progress("订阅连接或读取超时，正在重试一次…")
+        return _fetch_once(source)
+
+
+def _fetch_once(source):
     try:
         if source.startswith(("http://", "https://")):
             # Subscriptions are fetched directly, even when the shell exports proxy variables.
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({}), SubscriptionHTTPSHandler()
+            )
             request = urllib.request.Request(source, headers={"User-Agent": "Clash.Meta/mihomo-py"})
             with opener.open(request, timeout=20) as response:
                 data = response.read(MAX_BYTES + 1)
@@ -62,9 +76,17 @@ def fetch(source):
             suggestion="检查订阅地址是否过期；使用 sub set 修改地址。",
             retryable=exc.code >= 500 or exc.code == 429,
         ) from exc
+    except TimeoutError as exc:
+        raise AppError(
+            "download_timeout", "读取订阅来源超时，尚未取得完整配置。", retryable=True
+        ) from exc
     except PermissionError:
         raise
     except (OSError, urllib.error.URLError, ValueError) as exc:
+        if isinstance(getattr(exc, "reason", None), TimeoutError):
+            raise AppError(
+                "download_timeout", "连接订阅来源超时，尚未取得配置。", retryable=True
+            ) from exc
         raise AppError(
             "source_unavailable", "无法读取订阅来源。请检查文件或网络。", retryable=True
         ) from exc

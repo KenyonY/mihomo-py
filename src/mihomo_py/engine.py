@@ -15,8 +15,9 @@ import urllib.request
 from pathlib import Path
 
 from . import pidfd
-from .config import render
+from .config import parse, render
 from .errors import AppError
+from .geodata import seed_geodata
 from .store import atomic_write, valid_settings
 
 
@@ -86,23 +87,37 @@ class Engine:
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         return directory
 
-    def validate(self, content, settings, name):
+    def validate(self, content, settings, name, *, progress=None):
         binary = self.executable()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        data_dir = self.data_dir(name)
+        if progress:
+            progress("订阅已读取，正在准备地理数据…")
+        copied = seed_geodata(self.root, data_dir, parse(content))
+        if progress:
+            prefix = f"已复用 {len(copied)} 个地理数据文件，" if copied else "订阅已读取，"
+            progress(prefix + "正在校验配置（首次可能下载依赖）…")
         fd, temporary = tempfile.mkstemp(prefix=".check-", suffix=".yaml", dir=self.root)
         try:
             with os.fdopen(fd, "w") as stream:
                 stream.write(render(content, settings, "validation-only"))
             try:
                 result = subprocess.run(
-                    [binary, "-t", "-d", str(self.data_dir(name)), "-f", temporary],
+                    [binary, "-t", "-d", str(data_dir), "-f", temporary],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     timeout=self.timeout,
                 )
             except subprocess.TimeoutExpired as exc:
+                diagnostics = (exc.stdout or b"").decode(errors="replace")
+                atomic_write(self.root / "validation.log", diagnostics)
                 raise AppError(
-                    "validation_timeout", "内核校验超时，原配置未替换。", retryable=True
+                    "validation_timeout",
+                    "订阅已读取，但内核配置校验超时；订阅尚未保存，原配置未替换。",
+                    suggestion="首次校验可能需要下载地理数据或规则。"
+                    "可通过 MIHOMO_PY_GEODATA_DIR 提供离线地理数据；"
+                    f"详见 {self.root / 'validation.log'}。",
+                    retryable=True,
                 ) from exc
             if result.returncode:
                 # Keep raw diagnostics private: the core can echo subscription credentials.
@@ -239,7 +254,7 @@ class Engine:
             os.close(log_fd)
         record = {
             "pid": child.pid,
-            "identity": process_identity(child.pid),
+            "identity": None,
             "data_dir": data_dir,
             "subscription": name,
             "settings": settings,
@@ -247,12 +262,22 @@ class Engine:
             "secret": secret,
         }
         try:
+            deadline = time.monotonic() + self.timeout
+            # /proc may briefly expose an empty cmdline immediately after exec.
+            # Persist only a complete identity, or later stop/status cannot recognize it.
+            while time.monotonic() < deadline and child.poll() is None:
+                identity = process_identity(child.pid)
+                if identity and identity["cmdline"] == command:
+                    record["identity"] = identity
+                    break
+                time.sleep(0.01)
             if record["identity"] is None:
                 raise AppError(
-                    "start_failed", "内核启动后立即退出。", suggestion="运行 core logs 查看日志。"
+                    "start_failed",
+                    "内核退出或未能确认启动身份。",
+                    suggestion="运行 core logs 查看日志。",
                 )
             atomic_write(self.record_path, json.dumps(record))
-            deadline = time.monotonic() + self.timeout
             while time.monotonic() < deadline:
                 if child.poll() is not None:
                     break

@@ -154,6 +154,7 @@ class MihomoApp(App):
     .dialog-title { text-style: bold; color: $accent; margin-bottom: 1; }
     #form-fields { height: 1fr; }
     #form-error { height: auto; max-height: 3; color: $error; margin: 1 0; }
+    #form-error.progress { color: $accent; }
     """
 
     def __init__(self, manager):
@@ -466,6 +467,18 @@ class MihomoApp(App):
         self.query_one("#message").set_classes("error")
         if isinstance(self.screen, Form):
             self.screen.query_one("#form-error", Static).update(message)
+            self.screen.query_one("#form-error").remove_class("progress")
+
+    def subscription_progress(self, message):
+        self.call_from_thread(self.show_progress, message)
+
+    def show_progress(self, message):
+        if not self.busy:
+            return
+        self.query_one("#message", Static).update(message)
+        if isinstance(self.screen, Form):
+            self.screen.query_one("#form-error", Static).update(message)
+            self.screen.query_one("#form-error").add_class("progress")
 
     def operate(self, label, operation, form=None):
         if self.busy:
@@ -523,7 +536,10 @@ class MihomoApp(App):
                 lambda values, form: self.operate(
                     "添加订阅",
                     lambda: self.manager.put_sub(
-                        values["sub-name"], values["sub-source"], create=True
+                        values["sub-name"],
+                        values["sub-source"],
+                        create=True,
+                        progress=self.subscription_progress,
                     ),
                     form,
                 ),
@@ -581,7 +597,9 @@ class MihomoApp(App):
         elif button == "use":
             self.use_sub()
         elif button == "update" and name:
-            self.operate("更新订阅", lambda: self.manager.put_sub(name))
+            self.operate(
+                "更新订阅", lambda: self.manager.put_sub(name, progress=self.subscription_progress)
+            )
         elif button == "edit" and name:
             self.push_screen(
                 Form(
@@ -591,7 +609,9 @@ class MihomoApp(App):
                     ],
                     lambda values, form: self.operate(
                         "修改来源",
-                        lambda: self.manager.put_sub(name, values["sub-source"]),
+                        lambda: self.manager.put_sub(
+                            name, values["sub-source"], progress=self.subscription_progress
+                        ),
                         form,
                     ),
                 )

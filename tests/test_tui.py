@@ -197,3 +197,35 @@ async def test_stale_refresh_cannot_overwrite_action_result(tmp_path, monkeypatc
         gate.set()
         await settled(app, pilot)
         assert app.snapshot["status"]["settings"]["mode"] == "direct"
+
+
+async def test_subscription_progress_visible_while_validation_runs(tmp_path, monkeypatch):
+    import mihomo_py.manager as manager_module
+
+    gate = threading.Event()
+    validating = threading.Event()
+    app = MihomoApp(Manager(tmp_path / "home"))
+    monkeypatch.setattr(manager_module, "fetch", lambda *args, **kwargs: "proxies: []")
+
+    def validate(content, settings, name, *, progress=None):
+        progress("订阅已读取，正在校验配置…")
+        validating.set()
+        gate.wait(5)
+
+    monkeypatch.setattr(app.manager.engine, "validate", validate)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        await pilot.click("#add")
+        await pilot.press("x", "tab", *"https://example.invalid/sub")
+        await pilot.click("#form-submit")
+        try:
+            assert await asyncio.to_thread(validating.wait, 2)
+            await pilot.pause()
+            assert app.busy
+            assert "订阅已读取" in str(app.screen.query_one("#form-error", Static).content)
+            assert app.screen.query_one("#form-submit").region.bottom <= 24
+        finally:
+            gate.set()
+        await settled(app, pilot)
+        assert not isinstance(app.screen, Form)
+        assert "x" in app.manager.store.read()["subs"]

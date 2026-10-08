@@ -74,7 +74,7 @@ class Manager:
                 )
             raise
 
-    def put_sub(self, name, source=None, *, create=False):
+    def put_sub(self, name, source=None, *, create=False, progress=None):
         check_name(name)
         old = self.store.read()
         if create and name in old["subs"]:
@@ -83,14 +83,18 @@ class Manager:
             _, existing = self.subscription(old, name)
             source = source or existing["source"]
         source = normalize_source(source)
-        content = fetch(source)
-        self.engine.validate(content, old["settings"], name)
+        if progress:
+            progress("正在读取订阅来源…")
+        content = fetch(source, progress=progress)
+        self.engine.validate(content, old["settings"], name, progress=progress)
         new = copy.deepcopy(old)
         new["subs"][name] = {
             "source": source,
             "content": content,
             "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
+        if progress:
+            progress("配置校验通过，正在应用并保存订阅…")
         self.commit(new)
         return self.describe(new, name)
 
