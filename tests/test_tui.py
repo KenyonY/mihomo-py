@@ -2,11 +2,12 @@ import asyncio
 import threading
 
 import pytest
-from textual.widgets import DataTable, Input, Static, TabbedContent
+from textual.widgets import Button, DataTable, Input, Select, Static, TabbedContent
 
 from mihomo_py.controller import Controller
+from mihomo_py.errors import AppError
 from mihomo_py.manager import Manager
-from mihomo_py.tui import Form, MihomoApp
+from mihomo_py.tui import Details, Form, MihomoApp
 
 pytestmark = pytest.mark.asyncio
 
@@ -52,6 +53,7 @@ async def test_real_ui_subscription_lifecycle(real_core, source):
         await pilot.click("#form-submit")
         await settled(app, pilot)
         assert not isinstance(app.screen, Form)
+        assert app.focused.id == "add"
         # Trigger one refresh if modal dismissal deferred the automatic snapshot.
         app.action_refresh()
         await settled(app, pilot)
@@ -60,6 +62,7 @@ async def test_real_ui_subscription_lifecycle(real_core, source):
         assert not app.query_one("#sub-empty").display
         await pilot.click("#edit")
         assert not app.screen.query_one("#sub-source", Input).password
+        assert app.screen.query_one("#sub-source", Input).value == str(source)
         await pilot.press("escape")
         app.query_one("#subs", DataTable).focus()
         await pilot.press("enter")
@@ -79,7 +82,8 @@ async def test_real_ui_subscription_lifecycle(real_core, source):
         await settled(app, pilot)
         assert not real_core.status()["running"]
         await pilot.click("#remove")
-        await pilot.click("#form-cancel")
+        assert app.focused.id == "form-cancel"
+        await pilot.press("enter")
         assert "work" in real_core.store.read()["subs"]
         await pilot.click("#remove")
         await pilot.click("#form-submit")
@@ -140,8 +144,8 @@ rules: ["MATCH,DIRECT"]
         assert app.delay_results["DIRECT"] >= 0
         assert http_source["requests"]
         await pilot.click("#settings")
-        await pilot.press("tab", "tab", "ctrl+a", "ctrl+k", *"direct")
-        assert app.focused.id == "mode"
+        await pilot.press("tab", "tab", "enter", "end", "enter")
+        assert app.screen.query_one("#mode", Select).value == "direct"
         await pilot.click("#form-submit")
         await settled(app, pilot)
         assert real_core.status()["settings"]["mode"] == "direct"
@@ -229,3 +233,337 @@ async def test_subscription_progress_visible_while_validation_runs(tmp_path, mon
         await settled(app, pilot)
         assert not isinstance(app.screen, Form)
         assert "x" in app.manager.store.read()["subs"]
+
+
+def populated_snapshot(app, monkeypatch):
+    snapshot = app.read_snapshot()
+    names = [f"香港 [节点] - production-{i:02d}" for i in range(60)]
+    snapshot["subs"] = [
+        {
+            "name": name,
+            "source": "https://example.com/…",
+            "selected": i == 0,
+            "updated_at": "2026-10-08T08:00:00+00:00",
+        }
+        for i, name in enumerate(names)
+    ]
+    snapshot["status"].update(selected=names[0], running=True, healthy=True)
+    snapshot["proxies"] = {
+        "代理 [group]": {"type": "Selector", "all": names, "now": names[0]},
+        **{name: {"type": "Shadowsocks", "history": [{"delay": 100}]} for name in names},
+    }
+    monkeypatch.setattr(app, "read_snapshot", lambda: snapshot)
+    return snapshot
+
+
+@pytest.mark.parametrize("size", [(80, 24), (100, 32), (120, 40)])
+async def test_layout_resize_long_names_and_details(tmp_path, monkeypatch, size):
+    app = MihomoApp(Manager(tmp_path / "home"))
+    populated_snapshot(app, monkeypatch)
+    async with app.run_test(size=size) as pilot:
+        await settled(app, pilot)
+        await pilot.press("2")
+        table = app.query_one("#node-table", DataTable)
+        assert table.region.height - table.header_height >= 6
+        assert not table.show_horizontal_scrollbar
+        assert app.query_one("#test-url").region.bottom <= size[1] - 2
+        await pilot.press("i")
+        assert isinstance(app.screen, Details)
+        assert "香港 [节点] - production-00" in app.screen.content
+        await pilot.press("escape")
+        assert app.focused is table
+        table.move_cursor(row=35)
+        await pilot.pause()
+        selected = app.current_node()
+        await pilot.resize_terminal(80, 24)
+        await pilot.pause()
+        assert app.current_node() == selected
+        assert table.region.height - table.header_height >= 6
+        assert not table.show_horizontal_scrollbar
+        await pilot.click("#settings")
+        assert app.screen.query_one("#form-submit").region.bottom <= 23
+        assert app.screen.query_one("#mode").region.bottom <= 23
+
+
+async def test_refresh_preserves_cursor_and_reading_position(tmp_path, monkeypatch):
+    import copy
+
+    app = MihomoApp(Manager(tmp_path / "home"))
+    snapshot = populated_snapshot(app, monkeypatch)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        for page, selector in (("1", "#subs"), ("2", "#node-table")):
+            await pilot.press(page)
+            table = app.query_one(selector, DataTable)
+            table.focus()
+            table.move_cursor(row=35)
+            await pilot.pause()
+            table.scroll_relative(y=-3, animate=False)
+            await pilot.pause()
+            before = table.scroll_offset
+            app.apply_snapshot(copy.deepcopy(snapshot))
+            await pilot.pause()
+            assert table.cursor_row == 35
+            assert table.scroll_offset == before
+            changed = copy.deepcopy(snapshot)
+            changed["proxies"][app.node_names[35]]["history"] = [{"delay": 321}]
+            changed["subs"][0]["selected"] = False
+            app.apply_snapshot(changed)
+            await pilot.pause()
+            assert table.cursor_row == 35
+            assert table.scroll_offset == before
+        changed["proxies"][app.group_name]["all"].pop(0)
+        selected = app.current_node()
+        app.apply_snapshot(changed)
+        await pilot.pause()
+        assert app.current_node() == selected
+        assert table.scroll_offset == before
+
+
+async def test_shortcuts_search_empty_result_and_focus_restore(tmp_path, monkeypatch):
+    app = MihomoApp(Manager(tmp_path / "home"))
+    populated_snapshot(app, monkeypatch)
+    async with app.run_test() as pilot:
+        await settled(app, pilot)
+        await pilot.press("2", "slash")
+        assert app.focused.id == "filter"
+        await pilot.press("1", "2", "3", "question_mark", "i", "q")
+        assert app.query_one("#filter", Input).value == "123?iq"
+        assert app.query_one(TabbedContent).active == "nodes"
+        assert not app.node_names
+        await pilot.press("escape")
+        assert app.query_one("#filter", Input).value == ""
+        assert len(app.node_names) == 60
+        assert app.focused.id == "node-table"
+        await pilot.press("question_mark")
+        assert isinstance(app.screen, Details)
+        assert app.screen.query_one("#detail-close").region.bottom <= 23
+        await pilot.press("1")
+        assert app.query_one(TabbedContent).active == "nodes"
+        await pilot.press("escape")
+        assert app.focused.id == "node-table"
+        await pilot.press("3", "2")
+        assert app.focused.id == "node-table"
+        app.query_one("#group", Select).focus()
+        await pilot.press("enter", "1")
+        assert app.query_one(TabbedContent).active == "nodes"
+        await pilot.press("escape")
+
+
+async def test_form_validation_enter_and_error_details(tmp_path):
+    app = MihomoApp(Manager(tmp_path / "home"))
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        await pilot.click("#settings")
+        port = app.screen.query_one("#proxy-port", Input)
+        port.value = "70000"
+        await pilot.click("#form-submit")
+        assert app.focused is port
+        assert port.has_class("invalid")
+        await pilot.press("f8")
+        assert isinstance(app.screen, Details)
+        assert "65535" in app.screen.content
+        await pilot.press("escape")
+        assert app.focused is port
+        app.show_error(AppError("long", "错误详情 " * 100))
+        await pilot.pause()
+        assert app.screen.query_one("#form-submit").region.bottom <= 23
+        port.value = "9090"
+        await pilot.click("#form-submit")
+        assert app.focused.id == "controller-port"
+        assert "必须不同" in str(app.screen.query_one("#form-error", Static).content)
+        await pilot.press("escape")
+        assert app.focused.id == "settings"
+        await pilot.press("ctrl+a", "enter")
+        assert app.focused.id == "sub-source"
+        await pilot.press(*str(tmp_path / "missing.yaml"), "enter")
+        assert app.focused.id == "sub-name"
+        assert app.screen.query_one("#sub-name").has_class("invalid")
+        await pilot.press("w", "enter", "enter")
+        await settled(app, pilot)
+        assert isinstance(app.screen, Form)
+        assert "无法读取" in app.last_error
+        assert not app.screen.query_one("#sub-name").has_class("invalid")
+
+
+async def test_log_pause_freezes_window_and_end_resumes(tmp_path, monkeypatch):
+    import copy
+
+    app = MihomoApp(Manager(tmp_path / "home"))
+    snapshot = populated_snapshot(app, monkeypatch)
+    snapshot["logs"] = "\n".join(f"line {i}" for i in range(200))
+    async with app.run_test() as pilot:
+        await settled(app, pilot)
+        await pilot.press("3")
+        scroll = app.query_one("#log-scroll")
+        assert app.log_following
+        assert scroll.scroll_y == scroll.max_scroll_y > 0
+        await pilot.press("pageup")
+        assert not app.log_following
+        old_y = scroll.scroll_y
+        changed = copy.deepcopy(snapshot)
+        changed["logs"] = "\n".join(f"new {i}" for i in range(200))
+        monkeypatch.setattr(app, "read_snapshot", lambda: changed)
+        app.apply_snapshot(changed)
+        await pilot.pause()
+        assert str(app.query_one("#log-text", Static).content) == snapshot["logs"]
+        assert scroll.scroll_y == old_y
+        assert "有更新" in str(app.query_one("#log-hint", Static).content)
+        await pilot.press("end")
+        assert app.log_following
+        assert str(app.query_one("#log-text", Static).content) == changed["logs"]
+        assert scroll.scroll_y == scroll.max_scroll_y
+        await pilot.click("#log-follow")
+        assert not app.log_following
+        await pilot.pause(0.3)  # Textual debounces clicks during the button's active effect.
+        await pilot.click("#log-follow")
+        assert app.log_following
+
+
+async def test_automatic_group_enter_and_delay_failure_retry(tmp_path, monkeypatch):
+    app = MihomoApp(Manager(tmp_path / "home"))
+    snapshot = populated_snapshot(app, monkeypatch)
+    snapshot["proxies"]["代理 [group]"]["type"] = "URLTest"
+    gate = threading.Event()
+    entered = threading.Event()
+
+    def test_delay(*_):
+        entered.set()
+        gate.wait(5)
+        raise AppError("timeout", "测试目标不可达，请更换目标。")
+
+    class TestController:
+        def __init__(self, *args):
+            pass
+
+        test = test_delay
+        groups = staticmethod(Controller.groups)
+        members = staticmethod(Controller.members)
+
+        def select(self, *args):
+            pytest.fail("automatic groups must not submit a selection")
+
+    monkeypatch.setattr("mihomo_py.tui.Controller", TestController)
+    async with app.run_test() as pilot:
+        await settled(app, pilot)
+        await pilot.press("2", "enter")
+        assert not app.busy and not app.last_error
+        assert app.query_one("#select-node", Button).disabled
+        table = app.query_one("#node-table", DataTable)
+        name = app.current_node()
+        await pilot.click("#test-node")
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            assert "测试中" in str(table.get_cell(name, "3"))
+            assert app.query_one("#group", Select).disabled
+        finally:
+            gate.set()
+        await settled(app, pilot)
+        assert str(table.get_cell(name, "3")) == "失败"
+        assert "不可达" in app.last_error
+        monkeypatch.setattr(TestController, "test", lambda *args: {"name": name, "delay_ms": 12})
+        await pilot.click("#test-node")
+        await settled(app, pilot)
+        assert str(table.get_cell(name, "3")) == "12 ms"
+        assert name not in app.delay_errors
+
+
+async def test_external_names_render_literally_in_tooltips(tmp_path, monkeypatch):
+    from textual.widgets import Tooltip
+
+    app = MihomoApp(Manager(tmp_path / "home"))
+    snapshot = populated_snapshot(app, monkeypatch)
+    name = "节点 [bold]literal[/bold] [group]"
+    snapshot["status"]["selected"] = name
+    snapshot["proxies"]["代理 [group]"]["now"] = name
+    async with app.run_test(size=(100, 32), tooltips=True) as pilot:
+        await settled(app, pilot)
+        await pilot.hover("#subscription-value")
+        await pilot.pause(app.TOOLTIP_DELAY + 0.2)
+        tooltip = app.screen.query_one(Tooltip)
+        assert tooltip.display
+        rendered = "".join(strip.text for strip in tooltip.render_lines(tooltip.region.size.region))
+        assert name.replace(" ", "") in rendered.replace(" ", "")
+        await pilot.press("2")
+        await pilot.hover("#group-hint")
+        await pilot.pause(app.TOOLTIP_DELAY + 0.2)
+        assert tooltip.display
+        rendered = "".join(strip.text for strip in tooltip.render_lines(tooltip.region.size.region))
+        assert name.replace(" ", "") in rendered.replace(" ", "")
+        stopped = {**snapshot, "proxies": {}}
+        monkeypatch.setattr(app, "read_snapshot", lambda: stopped)
+        app.apply_snapshot(stopped)
+        await pilot.hover("#brand")
+        await pilot.hover("#group-hint")
+        await pilot.pause(app.TOOLTIP_DELAY + 0.2)
+        assert not tooltip.display
+
+
+async def test_last_text_field_enter_saves_settings(tmp_path):
+    app = MihomoApp(Manager(tmp_path / "home"))
+    async with app.run_test() as pilot:
+        await settled(app, pilot)
+        await pilot.click("#settings")
+        app.screen.query_one("#proxy-port", Input).value = "17897"
+        app.screen.query_one("#mode", Select).value = "direct"
+        app.screen.query_one("#controller-port", Input).focus()
+        await pilot.press("enter")
+        await settled(app, pilot)
+        assert not isinstance(app.screen, Form)
+        assert app.manager.status()["settings"]["proxy_port"] == 17897
+        assert app.manager.status()["settings"]["mode"] == "direct"
+        assert app.focused.id == "settings"
+
+
+async def test_log_resize_preserves_follow_or_pause(tmp_path, monkeypatch):
+    app = MihomoApp(Manager(tmp_path / "home"))
+    snapshot = populated_snapshot(app, monkeypatch)
+    snapshot["logs"] = "\n".join(f"line {i}" for i in range(200))
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        await pilot.press("3")
+        scroll = app.query_one("#log-scroll")
+        for size in ((120, 40), (80, 24)):
+            await pilot.resize_terminal(*size)
+            await pilot.pause()
+            assert app.log_following
+            assert scroll.scroll_y == scroll.max_scroll_y
+        await pilot.press("pageup", "pageup")
+        position = scroll.scroll_y
+        await pilot.resize_terminal(120, 40)
+        await pilot.pause()
+        assert not app.log_following
+        assert scroll.scroll_y == position
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_pending_source_read_cannot_open_dialog_after_quit(tmp_path, monkeypatch, fails):
+    app = MihomoApp(Manager(tmp_path / "home"))
+    populated_snapshot(app, monkeypatch)
+    entered = threading.Event()
+    gate = threading.Event()
+    completed = threading.Event()
+
+    def read():
+        entered.set()
+        gate.wait(5)
+        completed.set()
+        if fails:
+            raise OSError("read failed")
+        return {"subs": {app.sub_names[0]: {"source": "https://example.com/sub"}}}
+
+    try:
+        async with app.run_test() as pilot:
+            await settled(app, pilot)
+            monkeypatch.setattr(app.manager.store, "read", read)
+            await pilot.click("#edit")
+            assert await asyncio.to_thread(entered.wait, 2)
+            await pilot.press("ctrl+q")
+            assert not app.is_running
+            gate.set()
+            assert await asyncio.to_thread(completed.wait, 2)
+            await pilot.pause()
+            assert not isinstance(app.screen, Form)
+            assert app.last_error is None
+    finally:
+        gate.set()
