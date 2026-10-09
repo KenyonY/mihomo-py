@@ -63,7 +63,7 @@ docker buildx build \
   --tag mihomo-py:offline \
   --load .
 
-docker run --rm mihomo-py:offline
+docker run --rm --network=none mihomo-py:offline
 ```
 
 多平台 `--load` 需要支持 manifest list 的 Docker image store；否则使用 `--push` 推送到镜像仓库，或分别构建单平台镜像。ARM 在 x86 主机运行需要 BuildKit 提供 QEMU，或使用带 ARM 原生节点的 builder：
