@@ -51,3 +51,27 @@ MIHOMO_BUILD_ARCH=aarch64 python -m build --wheel --installer uv
 可在全新环境中运行 `python scripts/check_install.py`，验证包内资源、两种 GEO 模式以及真实 CLI 的校验、启动、本地代理访问和停止。使用该环境的 Python，避免误用开发环境的 editable 安装；可通过 `strace -f -e trace=network -o network.log` 包裹命令审计 Python 和 Go 子进程。
 
 本地构建不代表已发布；只有上传发行包并等待镜像同步后，用户才能直接从镜像执行 `pip install mihomo-py`。
+
+## Docker 多架构验证
+
+仓库根目录的 `Dockerfile` 使用 BuildKit 多阶段构建：第一阶段在目标架构生成 wheel 并从 `PIP_INDEX_URL` 下载 Python 依赖，最终阶段只用本地 wheelhouse 以 `--no-index` 安装，再运行真实 mihomo 校验、启动、代理访问和停止检查。安装阶段与运行阶段不依赖 GitHub。
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --build-arg PIP_INDEX_URL=https://your-pypi-mirror/simple \
+  --tag mihomo-py:offline \
+  --load .
+
+docker run --rm mihomo-py:offline
+```
+
+多平台 `--load` 需要支持 manifest list 的 Docker image store；否则使用 `--push` 推送到镜像仓库，或分别构建单平台镜像。ARM 在 x86 主机运行需要 BuildKit 提供 QEMU，或使用带 ARM 原生节点的 builder：
+
+```bash
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+docker buildx build --platform linux/amd64,linux/arm64 --push \
+  --tag registry.example/mihomo-py:offline .
+```
+
+若只验证当前机器，使用 `--platform linux/amd64 --load`；容器启动时的检查仍会调用真实包内 mihomo，而非 mock。
