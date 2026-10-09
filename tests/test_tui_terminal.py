@@ -19,6 +19,8 @@ def test_terminal_navigation_form_error_and_exit(tmp_path, no_color):
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
     env = {**os.environ, "TERM": "xterm-256color"}
     env.pop("NO_COLOR", None)
+    for variable in ("TMUX", "STY", "DISPLAY", "WAYLAND_DISPLAY"):
+        env.pop(variable, None)
     if no_color:
         env["NO_COLOR"] = "1"
     process = subprocess.Popen(
@@ -53,6 +55,9 @@ def test_terminal_navigation_form_error_and_exit(tmp_path, no_color):
 
     try:
         wait_text("退出界面")
+        send(b"\x03")
+        wait_text("没有选中内容")
+        assert process.poll() is None
         send(b"2")
         wait_text("内核已停止")
         send(b"/")
@@ -64,6 +69,9 @@ def test_terminal_navigation_form_error_and_exit(tmp_path, no_color):
         wait_text("搜索节点名称")
         send(b"?")
         wait_text("键盘操作")
+        send(b"\x1b[99;6u")  # Ctrl+Shift+C via CSI-u.
+        wait_text("没有选中内容")
+        assert process.poll() is None
         send(b"\x1b[<0;1;1M\x1b[<0;1;1m")  # Left-click the backdrop.
         wait_text("内核已停止")
         send(b"1")
@@ -71,6 +79,14 @@ def test_terminal_navigation_form_error_and_exit(tmp_path, no_color):
         send(b"\x01")
         wait_text("订阅名称")
         send(b"work")
+        send(b"\x01")  # Input's Ctrl+A moves home.
+        send(b"\x1b[1;2C" * 4)  # Shift+Right selects the name.
+        send(b"\x03")
+        wait_text("\x1b]52;c;d29yaw==\a")  # OSC52 carries base64("work").
+        assert process.poll() is None
+        send(b"\x1b[99;6u")
+        wait_text("\x1b]52;c;d29yaw==\a")
+        assert process.poll() is None
         send(b"\t")
         send(str(tmp_path / "missing.yaml").encode())
         send(b"\r")
@@ -78,6 +94,14 @@ def test_terminal_navigation_form_error_and_exit(tmp_path, no_color):
         send(b"\x1b[<0;1;1M\x1b[<0;1;1m")
         wait_text("还没有订阅")
         send(b"\x11")
+        # Keep consuming redraws while the terminal driver flushes on shutdown.
+        deadline = time.monotonic() + 5
+        while process.poll() is None and time.monotonic() < deadline:
+            if select.select([master], [], [], 0.1)[0]:
+                try:
+                    os.read(master, 65536)
+                except OSError:  # PTYs report EIO once the slave closes.
+                    break
         assert process.wait(timeout=5) == 0
     finally:
         if process.poll() is None:

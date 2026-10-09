@@ -23,6 +23,7 @@ from textual.widgets import (
     TabPane,
 )
 
+from . import clipboard
 from .bundle import dashboard_root
 from .controller import DEFAULT_TEST_URL, Controller, instance_id
 from .errors import AppError
@@ -283,7 +284,7 @@ class MihomoApp(App):
     BINDINGS = [
         Binding("q", "quit", "退出"),
         Binding("ctrl+q", "quit", "退出", show=False, priority=True),
-        Binding("ctrl+c", "quit", "退出", show=False, priority=True),
+        Binding("ctrl+c,ctrl+shift+c", "copy_selection", "复制选区", show=False, priority=True),
         Binding("ctrl+r", "refresh", "刷新"),
         Binding("ctrl+a", "add", "添加订阅"),
         Binding("1", "page('subscriptions')", "订阅", show=False),
@@ -487,6 +488,23 @@ class MihomoApp(App):
         self.update_nodes()
         self.query_one("#node-table" if self.node_names else "#group").focus()
 
+    def copy_to_clipboard(self, text):
+        self._clipboard = text
+        if self._driver is not None:
+            self._driver.write(clipboard.osc52(text))
+        clipboard.copy_external(text)
+
+    def action_copy_selection(self):
+        text = self.screen.get_selected_text()
+        if not text and isinstance(self.focused, Input):
+            text = self.focused.selected_text
+        if not text:
+            self.notify("没有选中内容：鼠标拖选文本后再复制；退出请按 q 或 Ctrl+Q。")
+            return
+        self.copy_to_clipboard(text)
+        self.screen.clear_selection()
+        self.notify(f"已发送选中的 {len(text)} 个字符到剪贴板。")
+
     def action_help(self):
         self.show_dialog(
             Details(
@@ -498,6 +516,7 @@ class MihomoApp(App):
                     "/    搜索节点；Esc 清空并返回列表\ni    查看当前行完整信息\n"
                     "Ctrl-R    刷新\nCtrl-A    添加订阅\nF8    查看完整错误\n"
                     "End    日志恢复跟随\n?    打开帮助\nEsc    关闭弹窗\n"
+                    "Ctrl-C / Ctrl-Shift-C    复制选中的文本\n"
                     "q / Ctrl-Q    退出（保留内核）\n\n"
                     "输入框保留文本编辑快捷键；弹窗内不切换页面。\n"
                     "● 表示已选订阅 / 生效节点，高亮背景表示正在浏览的行。\n"
