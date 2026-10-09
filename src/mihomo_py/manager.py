@@ -1,9 +1,10 @@
 import copy
+import json
 from datetime import datetime, timezone
 
 from .bundle import dashboard_root
 from .config import check_name, fetch, normalize_source, parse, source_label
-from .engine import Engine, fingerprint
+from .engine import Engine, fingerprint, process_identity
 from .errors import AppError
 from .store import Store, controller_address, valid_host
 
@@ -51,7 +52,27 @@ class Manager:
             "data_dir": str(self.store.root),
         }
 
+    def web_gateway(self):
+        path = self.store.root / "web-service.json"
+        try:
+            record = json.loads(path.read_text())
+        except FileNotFoundError:
+            return None
+        identity = process_identity(record["pid"])
+        if identity and identity == record["identity"]:
+            return record
+        return None
+
     def web(self):
+        gateway = self.web_gateway()
+        if gateway:
+            return {
+                "url": f"http://{controller_address({'controller_host': gateway['host']})}:"
+                       f"{gateway['port']}/",
+                "listen_host": gateway["host"], "port": gateway["port"],
+                "secret": self.engine.controller_secret(),
+                "hint": "此入口提供订阅管理与节点面板；远程访问时换成服务器 IP。",
+            }
         record = self.engine.running()
         if not record:
             raise AppError("core_stopped", "内核未运行。", 3, "先运行 core start。")

@@ -381,19 +381,24 @@ class Engine:
             self.record_path.unlink(missing_ok=True)
             raise
 
-    def replace(self, content, settings, name):
-        self.validate(content, settings, name)
-        old = self.running()
-        previous = self.runtime_path.read_text() if old else None
-        # Browser credentials survive restarts and subscription switches.
+    def controller_secret(self):
+        """One private credential for the controller and the optional Web manager."""
         secret_path = self.root / "controller-secret"
         if secret_path.exists():
             secret = secret_path.read_text().strip()
             if not secret or any(character.isspace() for character in secret):
                 raise AppError("invalid_secret", "controller-secret 无效，请恢复备份。")
         else:
+            old = self.running()
             secret = old["secret"] if old else secrets.token_urlsafe(32)
             atomic_write(secret_path, secret + "\n")
+        return secret
+
+    def replace(self, content, settings, name):
+        self.validate(content, settings, name)
+        old = self.running()
+        previous = self.runtime_path.read_text() if old else None
+        secret = self.controller_secret()
         dashboard = seed_dashboard(self.data_dir(name, parse(content)))
         compiled = render(content, settings, secret, dashboard=dashboard)
         # Check changed ports before stopping the working instance.

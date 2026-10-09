@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+@layer base {
+  body { @apply m-0 bg-slate-950 text-slate-200 antialiased; font-family: system-ui, sans-serif; }
+  button { @apply cursor-pointer rounded-lg px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40; }
+  button:focus-visible, input:focus-visible { @apply outline-2 outline-offset-2 outline-emerald-400; }
+  input { @apply w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm text-slate-100; }
+  label { @apply block space-y-2 text-sm text-slate-300; }
+}

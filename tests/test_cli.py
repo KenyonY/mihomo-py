@@ -338,3 +338,16 @@ def test_atomic_write_failure_preserves_previous_file(tmp_path, monkeypatch, ope
         atomic_write(target, "new")
     assert target.read_text() == "old"
     assert not list(tmp_path.glob(".tmp-*"))
+
+
+def test_web_service_help_secret_and_port_validation(command, tmp_path):
+    help_text = command("web", "serve", "--help").stdout
+    assert "0.0.0.0" in help_text and "9091" in help_text
+    secret = json.loads(command("web", "secret").stdout)["secret"]
+    assert len(secret) >= 32
+    assert json.loads(command("web", "secret").stdout)["secret"] == secret
+    assert secret not in command("core", "status").stdout
+    assert (tmp_path / "home/controller-secret").stat().st_mode & 0o777 == 0o600
+    result = command("web", "serve", "--port", "9090", expected=2)
+    assert json.loads(result.stderr)["error"] == "invalid_ports"
+    command("web", "serve", "--host", "invalid", expected=2)

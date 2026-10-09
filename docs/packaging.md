@@ -8,7 +8,7 @@ Linux x86_64 / aarch64、Python 3.11+、Linux 5.3+（允许 pidfd）。
 python -m pip install mihomo-py --index-url https://your-mirror.example/simple
 ```
 
-pip 镜像需要同步项目发行包及 `pyproject.toml` 声明的 Python 依赖。目标机器不需要 GitHub、Go、编译器或预装 mihomo。wheel 按 CPU 架构分开，内含静态内核及四份数据库；`pip install 'mihomo-py[web]'` 额外安装 `mihomo-py-web` 静态资源包，普通安装不含面板；源码包包含两个架构，pip 从源码构建也不会下载资源。构建依赖 hatchling 从 pip 源获取。
+pip 镜像需要同步项目发行包及 `pyproject.toml` 声明的 Python 依赖。目标机器不需要 GitHub、Go、编译器或预装 mihomo。wheel 按 CPU 架构分开，内含静态内核及四份数据库；`pip install 'mihomo-py[web]'` 额外安装 `mihomo-py-web` 静态资源包及 `aiohttp` Web 服务依赖，普通安装不含面板；源码包包含两个架构，pip 从源码构建也不会下载资源。构建依赖 hatchling 从 pip 源获取。
 
 安装后默认使用包内内核，不探测系统 PATH；`--core-binary` / `MIHOMO_PY_BINARY` 可显式覆盖。包内资源只读，首次校验从本地复制到每个订阅的数据目录；后续保留有效的已有文件，不共享可变缓存。GEO 自动更新固定关闭。
 

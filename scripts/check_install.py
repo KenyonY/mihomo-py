@@ -4,6 +4,7 @@ Run with the fresh environment's Python, optionally under strace to audit networ
 No preinstalled core, subscription service, or external destination is used.
 """
 
+import asyncio
 import http.client
 import json
 import os
@@ -33,6 +34,60 @@ def free_port():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def check_subscription_service(directory, source):
+    from aiohttp import ClientSession, WSMsgType, web
+
+    from mihomo_py.manager import Manager
+    from mihomo_py.web_server import API, create_app
+
+    async def verify():
+        manager = Manager(directory)
+        runner = web.AppRunner(create_app(manager), access_log=None)
+        await runner.setup()
+        port = free_port()
+        try:
+            await web.TCPSite(runner, "0.0.0.0", port).start()
+            origin = f"http://127.0.0.2:{port}"
+            headers = {"Authorization": "Bearer " + manager.engine.controller_secret()}
+            async with ClientSession() as client:
+                async def call(method, path, body=None, expected=200):
+                    async with client.request(
+                        method, origin + API + path, json=body, headers=headers
+                    ) as response:
+                        value = await response.json()
+                        assert response.status == expected, value
+                        return value
+
+                async with client.get(origin + "/") as response:
+                    assert response.status == 200
+                    index = await response.text()
+                for asset in re.findall(r'(?:src|href)="(/assets/[^"]+)"', index):
+                    async with client.get(origin + asset) as response:
+                        assert response.status == 200
+                        await response.read()
+                async with client.get(origin + API + "/subscriptions") as response:
+                    assert response.status == 401
+                await call("POST", "/subscriptions", {"name": "portal", "source": str(source)})
+                await call("POST", "/subscriptions/portal/use")
+                await call("POST", "/core/start")
+                async with client.get(origin + "/proxies", headers=headers) as response:
+                    assert response.status == 200
+                    assert "DIRECT" in (await response.json())["proxies"]
+                secret = manager.engine.controller_secret()
+                async with client.ws_connect(origin + "/traffic?token=" + secret) as stream:
+                    assert (await stream.receive(timeout=10)).type == WSMsgType.TEXT
+                await call("POST", "/core/stop")
+                await call("DELETE", "/subscriptions/portal")
+                assert not (await call("GET", "/subscriptions"))["status"]["running"]
+            print("Web subscription service: "
+                  "static/auth/add/switch/core/proxy/WebSocket/delete passed")
+        finally:
+            await runner.cleanup()
+            manager.engine.stop()
+
+    asyncio.run(verify())
 
 
 def main():
@@ -152,6 +207,8 @@ def main():
                     cli("core", "stop")
                 assert not cli("core", "status")["running"]
                 print(f"geodata-mode={mode}: validate/start/web/auth/proxy/stop passed")
+                if has_web and mode == "false":
+                    check_subscription_service(state, source)
         finally:
             server.shutdown()
             server.server_close()

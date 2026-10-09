@@ -54,3 +54,27 @@ async def test_running_web_dialog_at_80x24(real_core, source):
         await pilot.press("escape")
         await settled(app, pilot)
         assert real_core.status()["healthy"]
+
+
+async def test_stopped_core_with_web_service_can_open_panel(tmp_path):
+    import socket
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from mihomo_py.web_server import create_app
+
+    manager = Manager(tmp_path / "state")
+    with socket.socket() as socket_:
+        socket_.bind(("127.0.0.1", 0))
+        port = socket_.getsockname()[1]
+    application = create_app(manager, host="127.0.0.1", port=port)
+    async with TestClient(TestServer(application, port=port)):
+        app = MihomoApp(manager)
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settled(app, pilot)
+            assert not app.query_one("#web", Button).disabled
+            await pilot.click("#web")
+            await settled(app, pilot)
+            assert isinstance(app.screen, Details)
+            assert f":{port}/" in app.screen.content
+            assert not manager.status()["running"]

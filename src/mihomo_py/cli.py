@@ -310,6 +310,47 @@ def config_set(ctx, host, controller_host, proxy_port, controller_port, mode, dr
 
 
 @cli.group()
+def web():
+    """可选 Web 管理服务：订阅管理与节点面板共用一个浏览器入口。"""
+
+
+@web.command("serve")
+@click.option("--host", default="0.0.0.0", show_default=True, callback=host_option)
+@click.option("--port", default=9091, show_default=True, type=click.IntRange(1, 65535))
+@click.pass_context
+def web_serve(ctx, host, port):
+    """前台运行 Web 管理服务；退出服务不停止 mihomo 内核。"""
+    try:
+        from aiohttp import web as http
+
+        from .web_server import create_app
+    except ModuleNotFoundError as error:
+        if error.name == "aiohttp":
+            raise AppError(
+                "web_missing", "尚未安装 Web 服务依赖。", 3, "pip install 'mihomo-py[web]'。"
+            ) from None
+        raise
+    manager = ctx.obj["manager"]
+    settings = manager.store.read()["settings"]
+    if port in (settings["controller_port"], settings["proxy_port"]):
+        raise AppError("invalid_ports", "Web 服务端口须与管理 API、代理端口不同。", 2)
+    http.run_app(
+        create_app(manager, host=host, port=port), host=host, port=port, access_log=None,
+        print=lambda message: click.echo(message, err=True),
+    )
+
+
+@web.command("secret")
+@click.pass_context
+def web_secret(ctx):
+    """查看 Web/API 登录密钥（敏感信息）；内核未运行时也可使用。"""
+    manager = ctx.obj["manager"]
+    with manager.store.lock():
+        secret = manager.engine.controller_secret()
+    emit({"secret": secret}, ctx.obj["format"])
+
+
+@cli.group()
 def core():
     """管理本客户端启动的 mihomo 实例。"""
 

@@ -6,3 +6,4 @@ __pycache__/
 dist/
 web-dist/
 build/
+node_modules/

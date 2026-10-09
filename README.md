@@ -57,7 +57,7 @@ mihomo-py --format table core web
 
 zashboard v3.29.1 的静态资源通过可选资源包提供，使用系统字体，不需要 GitHub、CDN 或额外 Web 服务。页面请求限制到当前内核地址，关闭默认更新、外部 IP 和连通性检查。密钥不会出现在网页资源或普通状态输出中，重启后保持有效；`core web` 输出包含密钥，请勿分享。设置 `0.0.0.0` 会同时开放带密钥验证的管理 API，请在可信网络访问。
 
-Web 面板管理当前内核的节点、规则、流量和连接；本项目的订阅来源和启动设置仍由 CLI/TUI 管理。详见 [Web 面板说明](docs/web.md)。
+Web 面板管理当前内核的节点、规则、流量和连接。需要浏览器订阅管理时，运行 `mihomo-py web serve --port 19091`，访问 `http://服务器IP:19091/`；该入口支持添加、更新、修改来源、切换、删除订阅以及启动 / 停止内核，与 TUI/CLI 共用配置和密钥。详见 [Web 订阅管理](docs/subscriptions-web.md) 和 [节点面板](docs/web.md)。
 
 安装只需要可用的 pip 镜像源：内核和默认 GEO 数据已包含在 wheel / 源码发行包中，安装、构建和首次准备这些资源不访问 GitHub 或其他下载站。镜像需要同步本项目的发行包及 Python 依赖；安装 `[web]` 时还需要 `mihomo-py-web` 资源包。默认使用包内内核；如需覆盖，设置 `MIHOMO_PY_BINARY=/path/to/mihomo` 或使用全局选项 `--core-binary`（显式传入 `mihomo` 才会查找 PATH）。
 
@@ -108,6 +108,8 @@ unset SUB_URL
 | `core status` | 显示 PID、健康状态、已选订阅、实际运行订阅和设置 |
 | `core logs [--lines 100] [--follow]` | 查看内核日志 |
 | `core web` | 显示面板地址和登录密钥，须安装 `[web]` |
+| `web serve` | 前台运行 Web 订阅管理与节点统一入口，默认 `0.0.0.0:9091` |
+| `web secret` | 查看 Web/API 登录密钥，内核停止时也可用 |
 | `node list [--group GROUP]` | 列出代理组，或指定组的节点、选择和最近延迟 |
 | `node use NAME --group GROUP` | 按完整名称切换手动组节点，无需重启 |
 | `node test NAME [--url URL] [--timeout-ms 5000]` | 测量一个节点的 HTTP 延迟，默认超时 5 秒 |

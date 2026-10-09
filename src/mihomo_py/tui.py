@@ -811,7 +811,7 @@ class MihomoApp(App):
             )
             disabled.update(
                 start=not status["selected"], stop=not running, restart=not running,
-                web=not running or dashboard_root() is None,
+                web=dashboard_root() is None or not (running or self.manager.web_gateway()),
             )
             for key in ("use", "update", "edit", "remove"):
                 disabled[key] = not self.current_sub()

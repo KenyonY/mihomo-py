@@ -28,7 +28,7 @@ jobs:
           core = tomllib.loads(Path("pyproject.toml").read_text())["project"]
           web = tomllib.loads(Path("web/pyproject.toml").read_text())["project"]
           assert core["version"] == web["version"]
-          assert core["optional-dependencies"]["web"] == [f"mihomo-py-web=={web['version']}"]
+          assert f"mihomo-py-web=={web['version']}" in core["optional-dependencies"]["web"]
           if os.environ["GITHUB_REF_TYPE"] == "tag":
               assert os.environ["GITHUB_REF_NAME"] == f"v{core['version']}"
           PY

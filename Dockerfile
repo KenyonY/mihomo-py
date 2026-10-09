@@ -21,7 +21,11 @@ COPY web/ ./web/
 # Building the sdist and then its wheel must not download the core or geodata.
 RUN --network=none python -m build --no-isolation --outdir /wheels \
     && if [ "$INSTALL_WEB" = "true" ]; then python -m build --no-isolation --outdir /wheels web; fi
-RUN python -m pip download --only-binary=:all: --dest /wheels /wheels/mihomo_py-*.whl
+RUN if [ "$INSTALL_WEB" = "true" ]; then \
+       for task_wheel in /wheels/mihomo_py-*.whl; do \
+         python -m pip download --only-binary=:all: --find-links=/wheels \
+         --dest /wheels "${task_wheel}[web]"; done; \
+    else python -m pip download --only-binary=:all: --dest /wheels /wheels/mihomo_py-*.whl; fi
 
 FROM ${PYTHON_IMAGE} AS verify
 ARG INSTALL_WEB=false

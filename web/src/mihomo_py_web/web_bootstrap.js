@@ -22,4 +22,10 @@ if (!backend) {
   backends.push(backend);
   localStorage.setItem("setup/api-list", JSON.stringify(backends));
 }
+// The subscription portal and the embedded node panel share one authenticated origin.
+const portalSecret = localStorage.getItem("mihomo-py/secret");
+if (portalSecret) {
+  backend.password = portalSecret;
+  localStorage.setItem("setup/api-list", JSON.stringify(backends));
+}
 localStorage.setItem("setup/active-uuid", backend.uuid);
