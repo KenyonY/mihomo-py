@@ -179,6 +179,54 @@ def main():
                             page.wait_for_timeout(1200)
                             assert frames, "No authenticated gateway WebSocket frames"
                             page.get_by_role("button", name="订阅管理", exact=True).click()
+                            other_context = browser.new_context()
+                            other_context.route("**/*", route)
+                            other = other_context.new_page()
+                            other.goto(f"http://{authority}/")
+                            old_secret = manager.engine.controller_secret()
+                            other.get_by_label("登录密钥").fill(old_secret)
+                            other.get_by_role("button", name="登录", exact=True).click()
+                            expect(other.get_by_role("heading", name="订阅管理")).to_be_visible()
+                            custom_secret = 'yao+&?#"\\'
+                            page.get_by_role("button", name="设置", exact=True).click()
+                            page.get_by_label("新登录密钥", exact=True).fill(custom_secret)
+                            page.get_by_label("确认新密钥", exact=True).fill("different")
+                            page.get_by_role("button", name="保存密钥", exact=True).click()
+                            expect(page.get_by_role("dialog").get_by_role("alert")).to_contain_text(
+                                "两次输入的密钥不一致"
+                            )
+                            page.get_by_label("确认新密钥", exact=True).fill(custom_secret)
+                            page.get_by_role("button", name="保存密钥", exact=True).click()
+                            expect(page.get_by_role("dialog")).to_have_count(0)
+                            expect(page.get_by_text(
+                                "登录密钥已修改。其他浏览器需使用新密钥重新登录。", exact=True
+                            )).to_be_visible()
+                            assert manager.engine.controller_secret() == custom_secret
+                            assert manager.status()["healthy"]
+                            assert (
+                                Controller(manager.engine).proxies()["browser-test"]["now"]
+                                == "REJECT"
+                            )
+                            page.reload()
+                            expect(page.get_by_role("heading", name="订阅管理")).to_be_visible()
+                            page.get_by_role("button", name="节点面板", exact=True).click()
+                            expect(nodes.get_by_text("browser-test", exact=True)).to_be_visible()
+                            received = len(frames)
+                            nodes.locator('a[href="#/logs"]').click()
+                            page.wait_for_timeout(1200)
+                            assert len(frames) > received, (
+                                "No WebSocket frames after secret rotation"
+                            )
+                            page.get_by_role("button", name="订阅管理", exact=True).click()
+                            other.reload()
+                            expect(other.get_by_label("登录密钥")).to_be_visible()
+                            other.get_by_label("登录密钥").fill(old_secret)
+                            other.get_by_role("button", name="登录", exact=True).click()
+                            expect(other.get_by_role("alert")).to_contain_text("登录密钥错误")
+                            other.get_by_label("登录密钥").fill(custom_secret)
+                            other.get_by_role("button", name="登录", exact=True).click()
+                            expect(other.get_by_role("heading", name="订阅管理")).to_be_visible()
+                            other_context.close()
                             page.get_by_role("button", name="停止内核", exact=True).click()
                             expect(page.get_by_role("button", name="启动内核")).to_be_enabled()
                             page.set_viewport_size({"width": 390, "height": 844})
@@ -191,6 +239,7 @@ def main():
                             assert not external, external
                             print(
                                 "Chromium: subscription CRUD/switch/failure rollback/"
+                                "custom secret/session revocation/"
                                 "core lifecycle/"
                                 "embedded nodes/WebSocket/saved login/mobile width passed; "
                                 "external requests=0"

@@ -27,6 +27,7 @@ TabbedContent { height: 1fr; margin: 0 2; }
 Tabs { height: 2; }
 Tab { padding: 0 2; color: $text-muted; }
 Tab.-active { color: $accent; text-style: bold; }
+Tabs:focus Tab.-active { background: transparent; color: $accent; text-style: bold; }
 Underline > .underline--bar { color: $accent; background: $surface; }
 ContentSwitcher { height: 1fr; }
 TabPane { padding: 1 0 0 0; }

@@ -2,11 +2,13 @@ import copy
 import json
 from datetime import datetime, timezone
 
+import yaml
+
 from .bundle import dashboard_root
 from .config import check_name, fetch, normalize_source, parse, source_label
 from .engine import Engine, fingerprint, process_identity
 from .errors import AppError
-from .store import Store, controller_address, valid_host
+from .store import Store, atomic_write, controller_address, valid_host
 
 
 class Manager:
@@ -119,6 +121,41 @@ class Manager:
                     data_directory=running["data_dir"],
                 )
             raise
+
+    def set_secret(self, secret):
+        """Call under the instance lock; commit the credential only after core readiness."""
+        if not (
+            isinstance(secret, str) and 1 <= len(secret) <= 256
+            and all("!" <= character <= "~" for character in secret)
+        ):
+            raise AppError("invalid_secret", "密钥须为 1–256 个可见 ASCII 字符，不含空格。", 2)
+        if secret == self.engine.controller_secret():
+            return {"changed": False}
+        old = self.engine.running()
+        previous = self.engine.runtime_path.read_text() if old else None
+        if old:
+            config = parse(previous)
+            config["secret"] = secret
+            self.engine.replace_runtime(
+                yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
+                old["subscription"], old["settings"], old["fingerprint"], secret,
+            )
+        try:
+            atomic_write(self.store.root / "controller-secret", secret + "\n")
+        except OSError:
+            if old:
+                try:
+                    self.engine.replace_runtime(
+                        previous, old["subscription"], old["settings"],
+                        old["fingerprint"], old["secret"],
+                    )
+                except Exception as failure:
+                    raise AppError(
+                        "rollback_failed", "密钥保存失败，恢复旧实例也失败。",
+                        suggestion="检查 core logs 后重新 core start。",
+                    ) from failure
+            raise
+        return {"changed": True}
 
     def put_sub(self, name, source=None, *, create=False, progress=None):
         check_name(name)

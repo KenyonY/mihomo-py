@@ -396,17 +396,23 @@ class Engine:
 
     def replace(self, content, settings, name):
         self.validate(content, settings, name)
-        old = self.running()
-        previous = self.runtime_path.read_text() if old else None
         secret = self.controller_secret()
         dashboard = seed_dashboard(self.data_dir(name, parse(content)))
         compiled = render(content, settings, secret, dashboard=dashboard)
+        return self.replace_runtime(
+            compiled, name, settings, fingerprint(content, settings), secret
+        )
+
+    def replace_runtime(self, compiled, name, settings, digest, secret):
+        """Replace an already validated runtime, restoring the previous core on failure."""
+        old = self.running()
+        previous = self.runtime_path.read_text() if old else None
         # Check changed ports before stopping the working instance.
         if old:
             self.check_ports(settings, previous=old["settings"])
             self.stop()
         try:
-            return self.launch(compiled, name, settings, fingerprint(content, settings), secret)
+            return self.launch(compiled, name, settings, digest, secret)
         except BaseException as failure:
             if old:
                 try:

@@ -78,11 +78,20 @@ def check_subscription_service(directory, source):
                 secret = manager.engine.controller_secret()
                 async with client.ws_connect(origin + "/traffic?token=" + secret) as stream:
                     assert (await stream.receive(timeout=10)).type == WSMsgType.TEXT
+                result = await call("PUT", "/settings/secret", {"secret": "install-check-key"})
+                assert result == {"changed": True} and manager.status()["healthy"]
+                await call("GET", "/subscriptions", expected=401)
+                headers = {"Authorization": "Bearer install-check-key"}
+                assert manager.engine.controller_secret() == "install-check-key"
+                async with client.ws_connect(
+                    origin + "/traffic?token=install-check-key"
+                ) as stream:
+                    assert (await stream.receive(timeout=10)).type == WSMsgType.TEXT
                 await call("POST", "/core/stop")
                 await call("DELETE", "/subscriptions/portal")
                 assert not (await call("GET", "/subscriptions"))["status"]["running"]
             print("Web subscription service: "
-                  "static/auth/add/switch/core/proxy/WebSocket/delete passed")
+                  "static/auth/add/switch/core/proxy/WebSocket/custom-secret/delete passed")
         finally:
             await runner.cleanup()
             manager.engine.stop()

@@ -23,6 +23,9 @@ function App() {
   const [edit, setEdit] = useState<Edit | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const [view, setView] = useState("subscriptions");
+  const [changingKey, setChangingKey] = useState(false);
+  const [newSecret, setNewSecret] = useState("");
+  const [confirmation, setConfirmation] = useState("");
 
   async function request(path: string, method = "GET", body?: unknown, token = secret) {
     const response = await fetch(API + path, {
@@ -69,6 +72,19 @@ function App() {
     });
   }
 
+  async function saveSecret(event: FormEvent) {
+    event.preventDefault();
+    if (newSecret !== confirmation) { setError("两次输入的密钥不一致。"); return; }
+    await operate(async () => {
+      await request("/settings/secret", "PUT", { secret: newSecret });
+      localStorage.setItem(KEY, newSecret); setSecret(newSecret);
+      setView("subscriptions"); setChangingKey(false);
+      setNewSecret(""); setConfirmation("");
+      await refresh(newSecret);
+      setNotice("登录密钥已修改。其他浏览器需使用新密钥重新登录。");
+    });
+  }
+
   if (!snapshot) return <main className="mx-auto flex min-h-screen max-w-md items-center px-6">
     <form onSubmit={login} className="w-full space-y-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-8">
       <div><p className="text-sm text-emerald-400">mihomo-py</p><h1 className="mt-2 text-2xl font-semibold">订阅与节点管理</h1></div>
@@ -88,10 +104,12 @@ function App() {
           <button className={view === "nodes" ? primary : secondary} onClick={() => setView("nodes")} disabled={!status.running}>节点面板</button>
         </nav>
       </div>
-      <button className="text-slate-400 hover:text-slate-100" onClick={() => {
+      <div className="flex gap-2"><button className={secondary} disabled={busy} onClick={() => {
+        setError(""); setNewSecret(""); setConfirmation(""); setChangingKey(true);
+      }}>设置</button><button className="text-slate-400 hover:text-slate-100" disabled={busy} onClick={() => {
         localStorage.removeItem(KEY); localStorage.removeItem("setup/api-list");
         localStorage.removeItem("setup/active-uuid"); setSecret(""); setSnapshot(null); setView("subscriptions");
-      }}>退出登录</button>
+      }}>退出登录</button></div>
     </header>
     {view === "nodes" ? <iframe title="节点面板" src="/ui/" className="block h-[calc(100dvh-80px)] w-full border-0" /> :
       <main className="mx-auto max-w-5xl space-y-6 px-5 py-8 sm:px-8">
@@ -129,9 +147,19 @@ function App() {
         </article>)}</div>
         <p className="text-xs leading-5 text-slate-500">运行中切换或更新配置会重启内核。当前正在使用的订阅需先切换或停止内核才能删除。</p>
       </main>}
-    {(edit || removing) && <div className="fixed inset-0 z-10 flex items-center justify-center overflow-y-auto bg-black/70 p-5">
-      <section role="dialog" aria-modal="true" aria-label={edit ? (edit.existing ? "修改订阅来源" : "添加订阅") : "删除订阅"} className="w-full max-w-lg space-y-5 rounded-2xl border border-slate-700 bg-slate-900 p-6">
-        {edit ? <form onSubmit={save} className="space-y-5">
+    {(edit || removing || changingKey) && <div className="fixed inset-0 z-10 flex items-center justify-center overflow-y-auto bg-black/70 p-5">
+      <section role="dialog" aria-modal="true" aria-label={changingKey ? "修改登录密钥" : edit ? (edit.existing ? "修改订阅来源" : "添加订阅") : "删除订阅"} className="w-full max-w-lg space-y-5 rounded-2xl border border-slate-700 bg-slate-900 p-6">
+        {changingKey ? <form onSubmit={saveSecret} className="space-y-5">
+          <h2 className="text-lg font-semibold">修改登录密钥</h2>
+          <p className="text-sm leading-6 text-slate-400">Web 与管理 API 共用此密钥。保存时会重启运行中的内核，短暂中断连接；其他浏览器需重新登录。</p>
+          <label>新登录密钥<input required autoFocus type="password" autoComplete="new-password" maxLength={256} pattern="[!-~]+" disabled={busy} value={newSecret} onChange={e => setNewSecret(e.target.value)} /></label>
+          <p className="text-xs text-slate-500">1–256 个可见 ASCII 字符，不含空格。</p>
+          <label>确认新密钥<input required type="password" autoComplete="new-password" maxLength={256} disabled={busy} value={confirmation} onChange={e => setConfirmation(e.target.value)} /></label>
+          {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
+          <div className="flex justify-end gap-2"><button type="button" className={secondary} disabled={busy} onClick={() => {
+            setChangingKey(false); setNewSecret(""); setConfirmation(""); setError("");
+          }}>取消</button><button className={primary} disabled={busy}>{busy ? "正在保存…" : "保存密钥"}</button></div>
+        </form> : edit ? <form onSubmit={save} className="space-y-5">
           <h2 className="text-lg font-semibold">{edit.existing ? "修改订阅来源" : "添加订阅"}</h2>
           <label>订阅名称<input required autoFocus maxLength={64} disabled={edit.existing || busy} value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} /></label>
           <label>订阅地址或服务器 YAML 路径<input required type="text" autoComplete="off" disabled={busy} value={edit.source} onChange={e => setEdit({ ...edit, source: e.target.value })} placeholder="https://example.com/subscribe" /></label>

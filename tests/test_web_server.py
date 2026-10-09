@@ -5,6 +5,9 @@ import pytest
 from aiohttp import WSMsgType, WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
 
+from mihomo_py.config import parse
+from mihomo_py.controller import Controller
+from mihomo_py.errors import AppError
 from mihomo_py.manager import Manager
 from mihomo_py.web_server import API, create_app
 
@@ -164,3 +167,141 @@ async def test_gateway_shutdown_closes_websocket_but_keeps_core(real_core, sourc
         stream = await client.ws_connect("/traffic?token=" + real_core.engine.controller_secret())
         assert (await stream.receive(timeout=5)).type == WSMsgType.TEXT
     assert stream.closed and real_core.status()["healthy"]
+
+
+@pytest.mark.parametrize("secret", ["", " ", "has space", "line\nbreak", "中文", "x" * 257])
+async def test_invalid_secret_preserves_login(tmp_path, secret):
+    manager = Manager(tmp_path / "state")
+    async with TestClient(TestServer(create_app(manager))) as client:
+        old = manager.engine.controller_secret()
+        headers = {"Authorization": "Bearer " + old}
+        response = await client.put(
+            API + "/settings/secret", json={"secret": secret}, headers=headers
+        )
+        assert response.status == 400
+        assert manager.engine.controller_secret() == old
+        assert (await client.get(API + "/subscriptions", headers=headers)).status == 200
+
+
+async def test_secret_change_without_core_persists_across_gateway_restart(tmp_path):
+    manager = Manager(tmp_path / "state")
+    app = create_app(manager)
+    async with TestClient(TestServer(app)) as client:
+        old = manager.engine.controller_secret()
+        old_headers = {"Authorization": "Bearer " + old}
+        assert (await client.put(API + "/settings/secret", json={"secret": "yao"})).status == 401
+        response = await client.put(
+            API + "/settings/secret", json={"secret": "yao"}, headers=old_headers
+        )
+        assert response.status == 200 and await response.json() == {"changed": True}
+        assert (await client.get(API + "/subscriptions", headers=old_headers)).status == 401
+        headers = {"Authorization": "Bearer yao"}
+        assert (await client.get(API + "/subscriptions", headers=headers)).status == 200
+        response = await client.put(
+            API + "/settings/secret", json={"secret": "yao"}, headers=headers
+        )
+        assert await response.json() == {"changed": False}
+    async with TestClient(TestServer(create_app(Manager(manager.store.root)))) as client:
+        assert (await client.get(API + "/subscriptions", headers=headers)).status == 200
+        assert not manager.status()["running"]
+        assert (manager.store.root / "controller-secret").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.integration
+async def test_secret_change_revokes_old_http_and_websocket_and_preserves_core(real_core, source):
+    source.write_text(
+        "proxies: []\nproxy-groups:\n"
+        " - {name: select-group, type: select, proxies: [DIRECT, REJECT]}\n"
+        "rules: ['MATCH,DIRECT']\n"
+    )
+    real_core.put_sub("a", str(source), create=True)
+    real_core.use("a")
+    real_core.start()
+    Controller(real_core.engine).select("select-group", "REJECT")
+    before = real_core.store.read()
+    record = real_core.engine.running()
+    old = real_core.engine.controller_secret()
+    async with TestClient(TestServer(create_app(real_core))) as client:
+        stream = await client.ws_connect("/traffic?token=" + old)
+        assert (await stream.receive(timeout=5)).type == WSMsgType.TEXT
+        response = await client.put(
+            API + "/settings/secret", json={"secret": "yao"},
+            headers={"Authorization": "Bearer " + old},
+        )
+        assert response.status == 200 and await response.json() == {"changed": True}
+        while (await stream.receive(timeout=5)).type == WSMsgType.TEXT:
+            pass
+        assert stream.closed
+        old_headers = {"Authorization": "Bearer " + old}
+        headers = {"Authorization": "Bearer yao"}
+        assert (await client.get(API + "/subscriptions", headers=old_headers)).status == 401
+        assert (await client.get("/version", headers=old_headers)).status == 401
+        assert (await client.get("/version", headers=headers)).status == 200
+        with pytest.raises(WSServerHandshakeError) as rejected:
+            await client.ws_connect("/traffic?token=" + old)
+        assert rejected.value.status == 401
+        async with client.ws_connect("/traffic?token=yao") as new_stream:
+            assert (await new_stream.receive(timeout=5)).type == WSMsgType.TEXT
+        core_url = f"http://127.0.0.1:{record['settings']['controller_port']}/version"
+        assert (await client.session.get(core_url, headers=old_headers)).status == 401
+        assert (await client.session.get(core_url, headers=headers)).status == 200
+        assert real_core.store.read() == before
+        assert real_core.engine.running()["data_dir"] == record["data_dir"]
+        assert real_core.engine.running()["fingerprint"] == record["fingerprint"]
+        assert real_core.engine.running()["pid"] != record["pid"]
+        assert real_core.status()["healthy"]
+        assert Controller(real_core.engine).proxies()["select-group"]["now"] == "REJECT"
+        assert parse(real_core.engine.runtime_path.read_text())["secret"] == "yao"
+        real_core.start(restart=True)
+        assert real_core.engine.controller_secret() == real_core.web()["secret"] == "yao"
+        assert real_core.status()["healthy"]
+        assert (await client.post(API + "/core/stop", headers=headers)).status == 200
+        response = await client.put(
+            API + "/settings/secret", json={"secret": "next-key"}, headers=headers
+        )
+        assert response.status == 200
+        assert (await client.post(
+            API + "/core/start", headers={"Authorization": "Bearer next-key"}
+        )).status == 200
+        assert real_core.engine.running()["secret"] == "next-key" and real_core.status()["healthy"]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("failure", ["launch", "save"])
+async def test_failed_secret_change_restores_old_login_and_core(
+    real_core, source, monkeypatch, failure
+):
+    real_core.put_sub("a", str(source), create=True)
+    real_core.use("a")
+    real_core.start()
+    old = real_core.engine.controller_secret()
+    before = real_core.store.read()
+    if failure == "launch":
+        original = real_core.engine.launch
+        calls = []
+
+        def fail_once(*args, **kwargs):
+            calls.append(True)
+            if len(calls) == 1:
+                raise AppError("start_failed", "Injected launch failure")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(real_core.engine, "launch", fail_once)
+    else:
+        def fail_save(*args):
+            raise OSError("Injected save failure")
+
+        monkeypatch.setattr("mihomo_py.manager.atomic_write", fail_save)
+    async with TestClient(TestServer(create_app(real_core))) as client:
+        headers = {"Authorization": "Bearer " + old}
+        response = await client.put(
+            API + "/settings/secret", json={"secret": "yao"}, headers=headers
+        )
+        assert response.status == (500 if failure == "launch" else 502)
+        assert "yao" not in await response.text()
+        assert real_core.engine.controller_secret() == old
+        assert real_core.engine.running()["secret"] == old
+        assert parse(real_core.engine.runtime_path.read_text())["secret"] == old
+        assert real_core.status()["healthy"] and real_core.store.read() == before
+        assert (await client.get("/version", headers=headers)).status == 200
+        assert (await client.get("/version", headers={"Authorization": "Bearer yao"})).status == 401

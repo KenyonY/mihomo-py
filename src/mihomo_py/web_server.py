@@ -35,9 +35,10 @@ def create_app(manager, *, host=None, port=None):
     if root is None:
         raise AppError("web_missing", "尚未安装 Web 资源。", 3, "pip install 'mihomo-py[web]'。")
     portal = root.parent / "portal"
+    credential_key = web.RequestKey("credential", str)
     data = manager.store.root / "web-data"
     with manager.store.lock():
-        credential = manager.engine.controller_secret()
+        manager.engine.controller_secret()
         data.mkdir(exist_ok=True, mode=0o700)
         dashboard = data / seed_dashboard(data)
 
@@ -46,7 +47,9 @@ def create_app(manager, *, host=None, port=None):
         try:
             response = await handler(request)
         except AppError as error:
-            status = {2: 400, 3: 404, 4: 403, 5: 409}.get(error.code, 500)
+            status = 401 if error.kind == "unauthorized" else (
+                {2: 400, 3: 404, 4: 403, 5: 409}.get(error.code, 500)
+            )
             response = web.json_response(error.as_dict(), status=status)
         except (OSError, ClientError, TimeoutError):
             logging.getLogger(__name__).exception("Web operation failed")
@@ -71,6 +74,7 @@ def create_app(manager, *, host=None, port=None):
             token = authorization[7:] if authorization.startswith("Bearer ") else ""
             if not authorization and request.headers.get("Upgrade", "").lower() == "websocket":
                 token = request.query.get("token", "")
+            credential = await asyncio.to_thread(manager.engine.controller_secret)
             if not secrets.compare_digest(token.encode(), credential.encode()):
                 return web.json_response(
                     {
@@ -88,11 +92,13 @@ def create_app(manager, *, host=None, port=None):
                     },
                     status=403,
                 )
+            request[credential_key] = token
         return await handler(request)
 
     app = web.Application(middlewares=[errors, authenticate], client_max_size=8 * 1024 * 1024)
     session_key = web.AppKey("controller_session", ClientSession)
     sockets = set()
+    credential_lock = asyncio.Lock()
 
     async def close_sockets(application):
         await asyncio.gather(*(socket.close() for socket in tuple(sockets)))
@@ -128,10 +134,16 @@ def create_app(manager, *, host=None, port=None):
 
     app.cleanup_ctx.append(sessions)
 
-    async def call(operation, *, mutate=False):
+    async def call(request, operation, *, mutate=False):
         def execute():
             if mutate:
                 with manager.store.lock():
+                    # Recheck after acquiring the lock: a previous request may have rotated it.
+                    if not secrets.compare_digest(
+                        request[credential_key].encode(),
+                        manager.engine.controller_secret().encode(),
+                    ):
+                        raise AppError("unauthorized", "登录密钥已修改，请重新登录。", 4)
                     return operation()
             return operation()
 
@@ -147,7 +159,7 @@ def create_app(manager, *, host=None, port=None):
             or set(value) != set(fields)
             or not all(isinstance(value[key], str) and value[key].strip() for key in fields)
         ):
-            raise AppError("invalid_request", "名称和来源须为非空字符串。", 2)
+            raise AppError("invalid_request", "字段须为非空字符串。", 2)
         return value
 
     def name(request):
@@ -157,6 +169,7 @@ def create_app(manager, *, host=None, port=None):
 
     async def list_subscriptions(request):
         return await call(
+            request,
             lambda: {
                 "subscriptions": manager.list_subs(),
                 "status": manager.status(),
@@ -166,12 +179,14 @@ def create_app(manager, *, host=None, port=None):
     async def add(request):
         value = await body(request, ("name", "source"))
         return await call(
+            request,
             lambda: manager.put_sub(value["name"], value["source"], create=True), mutate=True
         )
 
     async def source(request):
         subscription = name(request)
         return await call(
+            request,
             lambda: {
                 "source": manager.subscription(manager.store.read(), subscription)[1]["source"],
             }
@@ -180,25 +195,35 @@ def create_app(manager, *, host=None, port=None):
     async def edit(request):
         subscription = name(request)
         value = await body(request, ("source",))
-        return await call(lambda: manager.put_sub(subscription, value["source"]), mutate=True)
+        return await call(
+            request, lambda: manager.put_sub(subscription, value["source"]), mutate=True
+        )
 
     async def update(request):
         subscription = name(request)
-        return await call(lambda: manager.put_sub(subscription), mutate=True)
+        return await call(request, lambda: manager.put_sub(subscription), mutate=True)
 
     async def use(request):
         subscription = name(request)
-        return await call(lambda: manager.use(subscription), mutate=True)
+        return await call(request, lambda: manager.use(subscription), mutate=True)
 
     async def remove(request):
         subscription = name(request)
-        return await call(lambda: manager.remove(subscription), mutate=True)
+        return await call(request, lambda: manager.remove(subscription), mutate=True)
 
     async def start(request):
-        return await call(manager.start, mutate=True)
+        return await call(request, manager.start, mutate=True)
 
     async def stop(request):
-        return await call(lambda: {"stopped": manager.engine.stop()}, mutate=True)
+        return await call(request, lambda: {"stopped": manager.engine.stop()}, mutate=True)
+
+    async def set_secret(request):
+        value = await body(request, ("secret",))
+        async with credential_lock:
+            response = await call(request, lambda: manager.set_secret(value["secret"]), mutate=True)
+            if json.loads(response.body)["changed"]:
+                await close_sockets(app)
+        return response
 
     async def index(request):
         return web.FileResponse(portal / "index.html")
@@ -226,8 +251,14 @@ def create_app(manager, *, host=None, port=None):
         downstream = secure(web.WebSocketResponse(heartbeat=30))
         if downstream.can_prepare(request).ok:
             async with session.ws_connect(target, headers=headers, heartbeat=30) as upstream:
-                await downstream.prepare(request)
-                sockets.add(downstream)
+                async with credential_lock:
+                    credential = await asyncio.to_thread(manager.engine.controller_secret)
+                    if not secrets.compare_digest(
+                        request[credential_key].encode(), credential.encode()
+                    ):
+                        raise AppError("unauthorized", "登录密钥已修改，请重新登录。", 4)
+                    await downstream.prepare(request)
+                    sockets.add(downstream)
 
                 async def relay(reader, writer):
                     async for message in reader:
@@ -283,6 +314,7 @@ def create_app(manager, *, host=None, port=None):
             web.delete(API + "/subscriptions/{name}", remove),
             web.post(API + "/core/start", start),
             web.post(API + "/core/stop", stop),
+            web.put(API + "/settings/secret", set_secret),
         ]
     )
     app.router.add_static("/assets/", portal / "assets", follow_symlinks=False)
