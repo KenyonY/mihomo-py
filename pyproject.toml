@@ -35,5 +35,5 @@ packages = ["src/mihomo_py"]
 exclude = ["src/mihomo_py/_vendor/**"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "docs", "scripts", "hatch_build.py", "pyproject.toml", "README.md"]
+include = ["src", "tests", "docs", "scripts", "hatch_build.py", "pyproject.toml", "README.md", "README.zh-CN.md"]
 exclude = ["/web"]
