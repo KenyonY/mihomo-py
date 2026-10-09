@@ -13,11 +13,13 @@ The following detailed maintenance guides are currently in Chinese:
 
 - [GEO databases / 地理数据库与失败重试](geodata.md)
 - [Offline installation & packaging / 离线安装与发行验证](packaging.md)
+- [Awesome list submissions / Awesome 列表投稿](awesome-submissions.md)
 
 ```text
 docs/
 ├── README.md             # Documentation index / 文档导航
 ├── assets/               # TUI and Web screenshots / 界面截图
+├── awesome-submissions.md # Awesome list submissions / 投稿链接与状态
 ├── cli.md                # CLI reference / 命令行参考
 ├── cli.en.md             # CLI reference (English)
 ├── tui.md                # Terminal UI / 终端界面
