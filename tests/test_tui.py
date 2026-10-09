@@ -155,6 +155,32 @@ rules: ["MATCH,DIRECT"]
         assert "Mihomo" in str(app.query_one("#log-text", Static).content)
 
 
+async def test_settings_host_validation_save_and_display(tmp_path):
+    manager = Manager(tmp_path / "home")
+    app = MihomoApp(manager)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        await pilot.click("#settings")
+        host = app.screen.query_one("#host", Input)
+        assert host.value == "127.0.0.1"
+        host.focus()
+        await pilot.press("ctrl+a", "ctrl+k", *"invalid")
+        await pilot.click("#form-submit")
+        await settled(app, pilot)
+        assert isinstance(app.screen, Form)
+        assert app.focused.id == "host"
+        assert host.value == "invalid"
+        await pilot.press("ctrl+a", "ctrl+k", *"0.0.0.0")
+        await pilot.click("#form-submit")
+        await settled(app, pilot)
+        assert not isinstance(app.screen, Form)
+        assert manager.store.read()["settings"]["host"] == "0.0.0.0"
+        app.action_refresh()
+        await settled(app, pilot)
+        assert "0.0.0.0" in str(app.query_one("#proxy-value", Static).content)
+        assert app.query_one("#proxy-value").tooltip == "0.0.0.0:7897"
+
+
 async def test_busy_operation_keeps_ui_responsive_and_blocks_quit(tmp_path):
     app = MihomoApp(Manager(tmp_path / "home"))
     gate = threading.Event()
@@ -506,7 +532,7 @@ async def test_last_text_field_enter_saves_settings(tmp_path):
         await pilot.click("#settings")
         app.screen.query_one("#proxy-port", Input).value = "17897"
         app.screen.query_one("#mode", Select).value = "direct"
-        app.screen.query_one("#controller-port", Input).focus()
+        app.screen.query_one("#host", Input).focus()
         await pilot.press("enter")
         await settled(app, pilot)
         assert not isinstance(app.screen, Form)

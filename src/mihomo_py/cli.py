@@ -12,6 +12,7 @@ from .config import check_name, normalize_source, source_label
 from .controller import DEFAULT_TEST_URL, Controller
 from .errors import AppError
 from .manager import Manager
+from .store import valid_host
 
 
 def emit(data, fmt):
@@ -269,21 +270,29 @@ def config():
 @config.command("show")
 @click.pass_context
 def config_show(ctx):
-    """查看端口和路由模式。"""
+    """查看代理监听地址、端口和路由模式。"""
     emit(ctx.obj["manager"].store.read()["settings"], ctx.obj["format"])
 
 
+def host_option(ctx, param, value):
+    if value is not None and not valid_host(value):
+        raise click.BadParameter("须为 IPv4 地址，例如 127.0.0.1 或 0.0.0.0。")
+    return value
+
+
 @config.command("set")
+@click.option("--host", callback=host_option, help="代理监听 IPv4 地址；0.0.0.0 监听所有接口。")
 @click.option("--proxy-port", type=click.IntRange(1, 65535))
 @click.option("--controller-port", type=click.IntRange(1, 65535))
 @click.option("--mode", type=click.Choice(["rule", "global", "direct"]))
 @click.option("--dry-run", is_flag=True)
 @click.pass_context
-def config_set(ctx, proxy_port, controller_port, mode, dry_run):
+def config_set(ctx, host, proxy_port, controller_port, mode, dry_run):
     """保存本机设置；内核运行时重启应用，失败则恢复旧配置。"""
     values = {
         key: value
         for key, value in {
+            "host": host,
             "proxy_port": proxy_port,
             "controller_port": controller_port,
             "mode": mode,

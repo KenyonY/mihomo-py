@@ -19,7 +19,7 @@ from .bundle import core_path
 from .config import parse, render
 from .errors import AppError
 from .geodata import check_geodata, geodata_transaction, seed_geodata
-from .store import atomic_write, valid_settings
+from .store import DEFAULT_SETTINGS, atomic_write, proxy_address, valid_settings
 
 
 def fingerprint(content, settings):
@@ -194,6 +194,8 @@ class Engine:
             return None
         try:
             record = json.loads(self.record_path.read_text())
+            if isinstance(record, dict) and isinstance(record.get("settings"), dict):
+                record["settings"].setdefault("host", DEFAULT_SETTINGS["host"])
             if type(record["pid"]) is not int or record["pid"] <= 1:
                 raise ValueError
             identity = record["identity"]
@@ -259,19 +261,26 @@ class Engine:
     @staticmethod
     def listeners(settings):
         return {
-            (socket.SOCK_STREAM, settings["proxy_port"]),
-            (socket.SOCK_DGRAM, settings["proxy_port"]),
-            (socket.SOCK_STREAM, settings["controller_port"]),
+            (settings["host"], socket.SOCK_STREAM, settings["proxy_port"]),
+            (settings["host"], socket.SOCK_DGRAM, settings["proxy_port"]),
+            ("127.0.0.1", socket.SOCK_STREAM, settings["controller_port"]),
         }
 
     def check_ports(self, settings, previous=None):
         owned = self.listeners(previous) if previous else set()
-        for kind, port in self.listeners(settings) - owned:
+        for host, kind, port in self.listeners(settings):
+            # A wildcard and a specific bind overlap. Recheck after stopping our core.
+            if any(
+                kind == old_kind and port == old_port
+                and (host == old_host or "0.0.0.0" in (host, old_host))
+                for old_host, old_kind, old_port in owned
+            ):
+                continue
             with socket.socket(type=kind) as sock:
                 if kind == socket.SOCK_STREAM:
                     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 try:
-                    sock.bind(("127.0.0.1", port))
+                    sock.bind((host, port))
                 except OSError as exc:
                     raise AppError(
                         "port_in_use",
@@ -293,7 +302,7 @@ class Engine:
                 if not isinstance(payload, dict) or not isinstance(payload.get("version"), str):
                     return False
             with socket.create_connection(
-                ("127.0.0.1", record["settings"]["proxy_port"]), timeout
+                (proxy_address(record["settings"]), record["settings"]["proxy_port"]), timeout
             ) as sock:
                 sock.sendall(b"\x05\x01\x00")
                 return sock.recv(2) == b"\x05\x00"

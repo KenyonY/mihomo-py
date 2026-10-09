@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from .config import check_name, fetch, normalize_source, source_label
 from .engine import Engine, fingerprint
 from .errors import AppError
-from .store import Store
+from .store import Store, valid_host
 
 
 class Manager:
@@ -126,6 +126,8 @@ class Manager:
         old = self.store.read()
         new = copy.deepcopy(old)
         new["settings"].update(values)
+        if not valid_host(new["settings"]["host"]):
+            raise AppError("invalid_host", "代理监听地址须为 IPv4 地址，例如 0.0.0.0。", 2)
         if new["settings"]["proxy_port"] == new["settings"]["controller_port"]:
             raise AppError("invalid_ports", "代理端口和管理端口必须不同。", 2)
         self.commit(new)

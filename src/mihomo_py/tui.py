@@ -22,6 +22,7 @@ from textual.widgets import (
 
 from .controller import DEFAULT_TEST_URL, Controller, instance_id
 from .errors import AppError
+from .store import valid_host
 
 
 class StableTable(DataTable):
@@ -616,8 +617,9 @@ class MihomoApp(App):
         subscription = selected if selected == running else f"{selected} / {running}"
         self.query_one("#subscription-value", Static).update(subscription)
         self.query_one("#subscription-value").tooltip = Text(f"已选：{selected} · 运行：{running}")
-        self.query_one("#proxy-value", Static).update(f":{settings['proxy_port']}")
-        self.query_one("#proxy-value").tooltip = f"127.0.0.1:{settings['proxy_port']}"
+        address = f"{settings['host']}:{settings['proxy_port']}"
+        self.query_one("#proxy-value", Static).update(address)
+        self.query_one("#proxy-value").tooltip = address
         self.query_one("#mode-value", Static).update(settings["mode"].upper())
         self.query_one("#sub-hint", Static).update(
             f"{len(snapshot['subs'])} 个订阅 · Enter 使用 · i 详情"
@@ -928,6 +930,10 @@ class MihomoApp(App):
                         ("proxy-port", "代理端口", str(settings["proxy_port"]), False),
                         ("controller-port", "管理端口", str(settings["controller_port"]), False),
                         ("mode", "模式：rule / global / direct", settings["mode"], False),
+                        (
+                            "host", "代理监听 IPv4 地址（0.0.0.0 为所有接口）",
+                            settings["host"], False,
+                        ),
                     ],
                     self.save_settings,
                     choices={
@@ -990,7 +996,10 @@ class MihomoApp(App):
         self.update_buttons()
 
     def save_settings(self, values, form):
-        settings = {"mode": values["mode"]}
+        if not valid_host(values["host"]):
+            form.field_error("host", "须为 IPv4 地址，例如 127.0.0.1 或 0.0.0.0。")
+            return
+        settings = {"mode": values["mode"], "host": values["host"]}
         for key in ("proxy-port", "controller-port"):
             try:
                 value = int(values[key])

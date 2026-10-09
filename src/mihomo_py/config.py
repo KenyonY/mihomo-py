@@ -114,7 +114,7 @@ def parse(content):
 
 def render(content, settings, secret):
     config = copy.deepcopy(parse(content))
-    # This stage owns only the local mixed proxy and authenticated loopback controller.
+    # Local settings own the mixed proxy; the authenticated controller stays on loopback.
     # Subscription updates cannot enable extra listeners, TUN, or public controllers.
     for key in (
         "external-doh-server",
@@ -140,8 +140,8 @@ def render(content, settings, secret):
             "socks-port": 0,
             "redir-port": 0,
             "tproxy-port": 0,
-            "allow-lan": False,
-            "bind-address": "127.0.0.1",
+            "allow-lan": settings["host"] != "127.0.0.1",
+            "bind-address": settings["host"],
             "external-controller": f"127.0.0.1:{settings['controller_port']}",
             "secret": secret,
             "mode": settings["mode"],

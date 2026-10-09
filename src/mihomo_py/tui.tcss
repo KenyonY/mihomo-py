@@ -66,7 +66,7 @@ Dialog { align: center middle; background: $background 85%; }
 #dialog { width: 66; max-width: 95%; height: auto; max-height: 90%;
           padding: 1 2; border: round $accent; background: $background; }
 .dialog-title { text-style: bold; margin-bottom: 1; }
-#form-fields { height: auto; max-height: 50vh; }
+#form-fields { height: auto; max-height: 40vh; }
 .field-label { height: auto; color: $text-muted; }
 #form-fields Input, #form-fields Select { margin-bottom: 1; }
 #form-error { height: auto; max-height: 3; color: $error; margin: 1 0; }

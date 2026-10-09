@@ -1,4 +1,5 @@
 import fcntl
+import ipaddress
 import json
 import os
 import tempfile
@@ -7,13 +8,30 @@ from pathlib import Path
 
 from .errors import AppError
 
-DEFAULT_SETTINGS = {"proxy_port": 7897, "controller_port": 9090, "mode": "rule"}
+DEFAULT_SETTINGS = {
+    "host": "127.0.0.1", "proxy_port": 7897, "controller_port": 9090, "mode": "rule"
+}
+
+
+def valid_host(host):
+    if not isinstance(host, str):
+        return False
+    try:
+        ipaddress.IPv4Address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def proxy_address(settings):
+    return "127.0.0.1" if settings["host"] == "0.0.0.0" else settings["host"]
 
 
 def valid_settings(settings):
     return (
         isinstance(settings, dict)
         and set(settings) == set(DEFAULT_SETTINGS)
+        and valid_host(settings["host"])
         and all(
             type(settings[key]) is int and 1 <= settings[key] <= 65535
             for key in ("proxy_port", "controller_port")
@@ -53,6 +71,9 @@ class Store:
             return {"version": 1, "selected": None, "settings": dict(DEFAULT_SETTINGS), "subs": {}}
         try:
             state = json.loads(path.read_text())
+            # Version 0.1.0 stored only ports and mode.
+            if isinstance(state, dict) and isinstance(state.get("settings"), dict):
+                state["settings"].setdefault("host", DEFAULT_SETTINGS["host"])
             if not (
                 state["version"] == 1
                 and isinstance(state["subs"], dict)

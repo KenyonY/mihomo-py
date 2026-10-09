@@ -12,7 +12,7 @@ from mihomo_py.store import Store
 
 def test_discovery_and_read_only_commands(command, tmp_path):
     assert "sub" in command("--help").stdout
-    assert "0.1.0" in command("--version").stdout
+    assert "0.1.1" in command("--version").stdout
     assert json.loads(command("sub", "list").stdout) == []
     assert json.loads(command("core", "status").stdout)["running"] is False
     assert json.loads(command("config", "show").stdout)["proxy_port"] == 7897
@@ -30,6 +30,7 @@ def test_discovery_and_read_only_commands(command, tmp_path):
         ["sub", "add", "test", "https://example.com/token-secret", "--dry-run"],
         ["sub", "set", "test", "https://example.com/token-secret", "--dry-run"],
         ["config", "set", "--mode", "direct", "--dry-run"],
+        ["config", "set", "--host", "0.0.0.0", "--dry-run"],
     ],
 )
 def test_dry_run_has_no_side_effect(command, tmp_path, args):
@@ -48,6 +49,8 @@ def test_dry_run_has_no_side_effect(command, tmp_path, args):
         (["config", "set"], "usage_error", 2),
         (["config", "set", "--proxy-port", "0"], "usage_error", 2),
         (["config", "set", "--proxy-port", "9090"], "invalid_ports", 2),
+        (["config", "set", "--host", "bad-host"], "usage_error", 2),
+        (["config", "set", "--host", "256.1.1.1", "--dry-run"], "usage_error", 2),
         (["sub", "add", "../bad", "file.yaml"], "invalid_name", 2),
         (["sub", "add", "test", "file:///etc/passwd"], "invalid_source", 2),
     ],
@@ -69,10 +72,23 @@ def test_state_lock_and_permissions(tmp_path):
     assert (store.root / "state.json").stat().st_mode & 0o777 == 0o600
 
 
-def test_invalid_state_reports_actionable_error(command, tmp_path):
+def test_host_settings_persist_and_old_state_defaults_to_loopback(command, tmp_path):
+    assert json.loads(command("config", "show").stdout)["host"] == "127.0.0.1"
+    assert json.loads(command("config", "set", "--host", "0.0.0.0").stdout)["host"] == "0.0.0.0"
+    assert json.loads(command("config", "show").stdout)["host"] == "0.0.0.0"
+    path = tmp_path / "home" / "state.json"
+    state = json.loads(path.read_text())
+    del state["settings"]["host"]
+    path.write_text(json.dumps(state))
+    assert json.loads(command("config", "show").stdout)["host"] == "127.0.0.1"
+    assert "host" not in json.loads(path.read_text())["settings"]
+
+
+@pytest.mark.parametrize("payload", ['{"version": 99}', '[]', 'null'])
+def test_invalid_state_reports_actionable_error(command, tmp_path, payload):
     root = tmp_path / "home"
     root.mkdir()
-    (root / "state.json").write_text('{"version": 99}')
+    (root / "state.json").write_text(payload)
     result = command("sub", "list", expected=1)
     assert json.loads(result.stderr)["error"] == "invalid_state"
 
@@ -125,7 +141,9 @@ tun: {enable: true}
 dns: {enable: true, listen: '0.0.0.0:53', nameserver: [1.1.1.1]}
 """
     compiled = yaml.safe_load(
-        render(source, {"proxy_port": 12345, "controller_port": 12346, "mode": "rule"}, "secret")
+        render(source, {
+            "host": "127.0.0.1", "proxy_port": 12345, "controller_port": 12346, "mode": "rule"
+        }, "secret")
     )
     assert compiled["mixed-port"] == 12345
     assert compiled["tun"]["enable"] is False

@@ -11,6 +11,59 @@ from mihomo_py.errors import AppError
 pytestmark = pytest.mark.integration
 
 
+def test_proxy_host_live_changes_and_legacy_running_state(real_core, source, http_source):
+    real_core.put_sub("a", str(source), create=True)
+    real_core.use("a")
+    original = real_core.start()
+    # Upgrade from 0.1.0 while the existing core is still running.
+    for path in (real_core.store.root / "state.json", real_core.engine.record_path):
+        value = json.loads(path.read_text())
+        del value["settings"]["host"]
+        path.write_text(json.dumps(value))
+    assert real_core.status()["pid"] == original["pid"]
+    assert real_core.status()["healthy"]
+    for host, destination in (("0.0.0.0", "127.0.0.2"), ("127.0.0.2", "127.0.0.2")):
+        real_core.configure({"host": host})
+        status = real_core.status()
+        assert status["healthy"] and status["running_settings"]["host"] == host
+        assert status["pid"] != original["pid"]
+        compiled = yaml.safe_load(real_core.engine.runtime_path.read_text())
+        assert compiled["bind-address"] == host
+        assert compiled["allow-lan"] is True
+        assert compiled["external-controller"].startswith("127.0.0.1:")
+        proxy = http.client.HTTPConnection(destination, status["settings"]["proxy_port"], timeout=3)
+        try:
+            proxy.request("GET", http_source["url"])
+            response = proxy.getresponse()
+            assert response.status == 200
+            assert b"MATCH,DIRECT" in response.read()
+        finally:
+            proxy.close()
+    # The controller never follows the public proxy bind.
+    with pytest.raises(OSError):
+        socket.create_connection(("127.0.0.2", status["settings"]["controller_port"]), timeout=1)
+    real_core.configure({"host": "127.0.0.1"})
+    assert real_core.status()["healthy"]
+    assert yaml.safe_load(real_core.engine.runtime_path.read_text())["allow-lan"] is False
+
+
+@pytest.mark.parametrize("kind", [socket.SOCK_STREAM, socket.SOCK_DGRAM])
+def test_wildcard_host_conflict_restores_loopback_core(real_core, source, kind):
+    real_core.put_sub("a", str(source), create=True)
+    real_core.use("a")
+    before = real_core.start()
+    with socket.socket(type=kind) as occupied:
+        occupied.bind(("127.0.0.2", before["settings"]["proxy_port"]))
+        if kind == socket.SOCK_STREAM:
+            occupied.listen()
+        with pytest.raises(AppError, match="端口"):
+            real_core.configure({"host": "0.0.0.0"})
+    after = real_core.status()
+    assert after["healthy"]
+    assert after["running_settings"] == before["running_settings"]
+    assert after["settings"] == before["settings"]
+
+
 def test_real_cli_lifecycle(real_core, command, source, http_source):
     command("sub", "add", "a", str(source))
     command("sub", "add", "a", str(source), expected=5)
