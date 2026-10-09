@@ -42,12 +42,15 @@ class StableTable(DataTable):
         self.set_records(self.records)
 
     async def _on_click(self, event: events.Click) -> None:
-        # Browsing a subscription must not apply it, even on repeated clicks.
+        # Only a double-click applies a subscription; single clicks just browse.
         # Other tables keep Textual's automatic base-handler dispatch.
         if self.id == "subs":
             event.prevent_default()  # Textual otherwise invokes the base handler again.
-            with self.prevent(DataTable.RowSelected):
+            if event.button == 1 and event.chain == 2:
                 await super()._on_click(event)
+            else:
+                with self.prevent(DataTable.RowSelected):
+                    await super()._on_click(event)
 
     def set_records(self, records):
         available = max(52, self.size.width - 10)  # cell padding + scrollbar
@@ -124,6 +127,11 @@ class Dialog(ModalScreen):
         Binding("escape", "cancel", "关闭"),
         Binding("f8", "error_details", "错误详情", show=False),
     ]
+
+    def on_click(self, event: events.Click):
+        if event.button == 1 and event.widget is self:
+            event.stop()
+            self.action_cancel()
 
     def action_cancel(self):
         self.dismiss()
@@ -353,7 +361,9 @@ class MihomoApp(App):
             yield Button("刷新", id="refresh")
         with TabbedContent():
             with TabPane("1 订阅", id="subscriptions"):
-                yield Static("订阅库   /   ↑↓ 选择，Enter 使用", id="sub-hint", classes="hint")
+                yield Static(
+                    "订阅库   /   ↑↓ 选择，双击或 Enter 使用", id="sub-hint", classes="hint"
+                )
                 with Vertical(classes="list-area"):
                     yield StableTable(("", "订阅", "来源", "更新于"), id="subs")
                     yield Static(
@@ -491,7 +501,8 @@ class MihomoApp(App):
                     "q / Ctrl-Q    退出（保留内核）\n\n"
                     "输入框保留文本编辑快捷键；弹窗内不切换页面。\n"
                     "● 表示已选订阅 / 生效节点，高亮背景表示正在浏览的行。\n"
-                    "订阅单击只选择，Enter 或使用按钮执行；运行中切换会重启内核。\n"
+                    "订阅单击选择，双击、Enter 或使用按钮执行；运行中切换会重启内核。\n"
+                    "点击弹窗外部可关闭；执行中的表单需等待完成。\n"
                     "日志可能包含订阅内部地址。"
                 ),
             )
@@ -804,7 +815,7 @@ class MihomoApp(App):
             self.query_one("#edit", Button).tooltip = (
                 warning if update_restarts else "修改来源并重新读取、校验订阅。"
             )
-            action = "Enter 使用并重启" if use_restarts else "Enter 使用"
+            action = "双击/Enter 使用并重启" if use_restarts else "双击/Enter 使用"
             warning_hint = " · 更新变更将重启" if update_restarts else ""
             self.query_one("#sub-hint", Static).update(
                 f"{len(self.sub_names)} 个订阅 · 单击选择 · {action}{warning_hint} · i 详情"

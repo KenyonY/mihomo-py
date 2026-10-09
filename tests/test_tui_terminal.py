@@ -64,7 +64,7 @@ def test_terminal_navigation_form_error_and_exit(tmp_path, no_color):
         wait_text("搜索节点名称")
         send(b"?")
         wait_text("键盘操作")
-        send(b"\x1b")
+        send(b"\x1b[<0;1;1M\x1b[<0;1;1m")  # Left-click the backdrop.
         wait_text("内核已停止")
         send(b"1")
         wait_text("还没有订阅")
@@ -75,7 +75,7 @@ def test_terminal_navigation_form_error_and_exit(tmp_path, no_color):
         send(str(tmp_path / "missing.yaml").encode())
         send(b"\r")
         wait_text("无法读取")
-        send(b"\x1b")
+        send(b"\x1b[<0;1;1M\x1b[<0;1;1m")
         wait_text("还没有订阅")
         send(b"\x11")
         assert process.wait(timeout=5) == 0

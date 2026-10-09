@@ -43,6 +43,96 @@ async def test_empty_ui_keyboard_and_modal_cancel(tmp_path):
         await pilot.press("ctrl+q")
 
 
+@pytest.mark.parametrize("size", [(80, 24), (120, 40)])
+async def test_dialog_backdrop_cancels_and_restores_focus(tmp_path, size):
+    app = MihomoApp(Manager(tmp_path / "home"))
+    async with app.run_test(size=size) as pilot:
+        await settled(app, pilot)
+        for selector in ("#add", "#settings"):
+            await pilot.click(selector)
+            form = app.screen
+            assert isinstance(form, Form)
+            for target, offset in (
+                ("#dialog", (0, 0)),
+                ("#dialog", (1, 1)),
+                (".dialog-title", (0, 0)),
+            ):
+                await pilot.click(target, offset=offset)
+                assert app.screen is form
+            field = form.query(Input).first()
+            await pilot.click(field)
+            await pilot.press("x")
+            await pilot.click(offset=(0, 0), button=3)
+            assert app.screen is form
+            # The click also overlaps a background button; it must only cancel.
+            button = app.query_one(selector, Button)
+            background = app.query_one("#add", Button).region
+            assert background.offset not in form.query_one("#dialog").region
+            await pilot.click(offset=(background.x, background.y))
+            await settled(app, pilot)
+            assert not isinstance(app.screen, Form)
+            assert app.focused is button
+            assert not (tmp_path / "home").exists()
+        await pilot.press("question_mark")
+        details = app.screen
+        await pilot.click("#detail-scroll")
+        assert app.screen is details
+        await pilot.click(offset=(0, 0))
+        assert not isinstance(app.screen, Details)
+        assert app.focused.id == "settings"
+
+
+async def test_backdrop_closes_only_top_dialog_and_preserves_select(tmp_path):
+    app = MihomoApp(Manager(tmp_path / "home"))
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        await pilot.click("#settings")
+        form = app.screen
+        mode = form.query_one("#mode", Select)
+        mode.focus()
+        await pilot.press("enter")
+        assert mode.expanded
+        await pilot.click("SelectOverlay", offset=(2, 2))
+        assert app.screen is form
+        assert not mode.expanded
+        field = form.query_one("#proxy-port", Input)
+        field.value = "70000"
+        await pilot.click("#form-submit")
+        await pilot.press("f8")
+        assert isinstance(app.screen, Details)
+        await pilot.click(offset=(0, 0))
+        assert app.screen is form
+        assert app.focused is field
+        assert field.value == "70000"
+        await pilot.click(offset=(0, 0))
+        assert not isinstance(app.screen, Form)
+        assert app.focused.id == "settings"
+
+
+async def test_busy_form_ignores_backdrop_but_details_can_close(tmp_path):
+    app = MihomoApp(Manager(tmp_path / "home"))
+    gate = threading.Event()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        await pilot.click("#add")
+        form = app.screen
+        app.operate("保存订阅", lambda: gate.wait(20), form)
+        try:
+            await pilot.pause()
+            await pilot.click(offset=(0, 0))
+            assert app.screen is form and app.busy
+            app.action_help()
+            await pilot.pause()
+            assert isinstance(app.screen, Details)
+            await pilot.click(offset=(0, 0))
+            assert app.screen is form and app.busy
+        finally:
+            gate.set()
+        await settled(app, pilot)
+        assert not isinstance(app.screen, Form)
+        assert not app.busy
+
+
 @pytest.mark.integration
 async def test_real_ui_subscription_lifecycle(real_core, source):
     app = MihomoApp(real_core)
@@ -159,6 +249,45 @@ async def test_subscription_click_browses_and_enter_applies(real_core, source):
         await settled(app, pilot)
         assert real_core.status()["pid"] != pid
         assert real_core.status()["healthy"]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("running", [False, True])
+@pytest.mark.parametrize("clicks", [2, 3])
+async def test_subscription_double_click_applies_once(
+    real_core, source, monkeypatch, running, clicks
+):
+    real_core.put_sub("work", str(source), create=True)
+    real_core.put_sub("backup", str(source), create=True)
+    real_core.use("work")
+    if running:
+        real_core.start()
+    pid = real_core.status()["pid"]
+    calls = []
+    original_use = real_core.use
+
+    def use(name):
+        calls.append(name)
+        return original_use(name)
+
+    monkeypatch.setattr(real_core, "use", use)
+    app = MihomoApp(real_core)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        await pilot.click("#subs", offset=(8, 0), times=2)
+        await pilot.click("#subs", offset=(8, 2), times=2, button=3)
+        assert not calls
+        await pilot.click("#subs", offset=(8, 2), times=clicks)
+        await settled(app, pilot)
+        assert calls == ["backup"]
+        assert real_core.status()["selected"] == "backup"
+        assert real_core.status()["running"] is running
+        if running:
+            assert real_core.status()["running_subscription"] == "backup"
+            assert real_core.status()["pid"] != pid
+            assert real_core.status()["healthy"]
+        elif clicks == 2:
+            assert app.focused.id == "start"
 
 
 async def test_form_errors_preserve_inputs(tmp_path):
