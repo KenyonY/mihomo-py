@@ -105,8 +105,9 @@ async def test_addition_focuses_new_subscription_without_applying(real_core, sou
         await settled(app, pilot)
         assert app.focused.id == "subs"
         assert app.current_sub() == "existing"
-        await pilot.press("ctrl+a", *"new", "tab", *str(source), "enter")
+        await pilot.press("2", "ctrl+a", *"new", "tab", *str(source), "enter")
         await settled(app, pilot)
+        assert app.query_one(TabbedContent).active == "subscriptions"
         assert app.focused.id == "subs"
         assert app.current_sub() == "new"
         assert real_core.status()["selected"] == "existing"
@@ -129,7 +130,8 @@ async def test_subscription_click_browses_and_enter_applies(real_core, source):
     async with app.run_test(size=(80, 24)) as pilot:
         await settled(app, pilot)
         table = app.query_one("#subs", DataTable)
-        table.move_cursor(row=1, column=1)
+        table.move_cursor(row=0, column=1)
+        assert app.current_sub() == "work"
         await pilot.pause()
         for _ in range(2):
             await pilot.click("#subs", offset=(8, 2))
@@ -166,17 +168,19 @@ async def test_form_errors_preserve_inputs(tmp_path):
         await pilot.click("#add")
         await pilot.press("w", "tab")
         await pilot.press(*str(tmp_path / "missing.yaml"))
-        await pilot.click("#form-submit")
+        await pilot.press("enter")
         await settled(app, pilot)
         assert isinstance(app.screen, Form)
         assert app.screen.query_one("#sub-name", Input).value == "w"
         assert app.last_error and "无法读取" in app.last_error
         assert not app.busy
         assert not app.screen.query_one("#sub-source", Input).disabled
+        assert app.focused.id == "sub-source"
+        assert "ENOENT" in app.last_error_details
         await pilot.press("escape")
 
 
-@pytest.mark.parametrize("kind", ["permission", "wrapped", "validation"])
+@pytest.mark.parametrize("kind", ["permission", "wrapped", "wrapped_app", "validation"])
 async def test_error_details_include_safe_context_without_credentials(tmp_path, kind):
     app = MihomoApp(Manager(tmp_path / "home"))
     secret = "PRIVATE-TOKEN-DO-NOT-DISPLAY"
@@ -189,6 +193,11 @@ async def test_error_details_include_safe_context_without_credentials(tmp_path, 
                 raise OSError(errno.ENOSPC, secret)
             except OSError as error:
                 raise RuntimeError(secret) from error
+        if kind == "wrapped_app":
+            try:
+                raise FileNotFoundError(errno.ENOENT, secret, secret)
+            except OSError as error:
+                raise AppError("source_unavailable", "无法读取订阅来源。") from error
         raise AppError(
             "validation_failed", "mihomo 拒绝此配置，原配置未替换。",
             suggestion=f"查看本地诊断文件：{tmp_path / 'validation.log'}",
@@ -208,9 +217,13 @@ async def test_error_details_include_safe_context_without_credentials(tmp_path, 
             assert "validation_failed" in content
             assert str(tmp_path / "validation.log") in content
         else:
-            code = errno.EACCES if kind == "permission" else errno.ENOSPC
+            code = {
+                "permission": errno.EACCES, "wrapped": errno.ENOSPC, "wrapped_app": errno.ENOENT
+            }[kind]
             assert errno.errorcode[code] in content
             assert os.strerror(code) in content
+            if kind == "wrapped_app":
+                assert "原因异常：FileNotFoundError" in content
         assert app.screen.query_one("#detail-close").region.bottom <= 23
         await pilot.press("escape")
         assert app.last_error_details == content

@@ -163,13 +163,14 @@ def error_details(error, operation):
         lines.extend([f"错误代码：{error.kind}", error_message(error)])
     else:
         lines.append(error_message(error))
-        cause = error if isinstance(error, OSError) else error.__cause__
-        if isinstance(cause, OSError) and cause.errno is not None:
-            code = cause.errno
-            lines.extend([
-                f"系统错误：{errno.errorcode.get(code, 'UNKNOWN')}（errno={code}）",
-                f"系统原因：{os.strerror(code)}",
-            ])
+    cause = error if isinstance(error, OSError) else error.__cause__
+    if isinstance(cause, OSError) and cause.errno is not None:
+        code = cause.errno
+        lines.extend([
+            f"原因异常：{type(cause).__name__}",
+            f"系统错误：{errno.errorcode.get(code, 'UNKNOWN')}（errno={code}）",
+            f"系统原因：{os.strerror(code)}",
+        ])
     return "\n".join(lines)
 
 
@@ -859,6 +860,7 @@ class MihomoApp(App):
     def operate(self, label, operation, form=None, *, focus=None, success=None):
         if self.busy:
             return
+        form_focus = self.focused if form else None
         self.busy = True
         self.revision += 1
         self.last_error = None
@@ -867,10 +869,11 @@ class MihomoApp(App):
         self.query_one("#message", Static).update(f"{label}…")
         self.update_buttons()
         self.run_worker(
-            self.run_operation(label, operation, form, focus, success), group="operation"
+            self.run_operation(label, operation, form, focus, success, form_focus),
+            group="operation",
         )
 
-    async def run_operation(self, label, operation, form, focus, success):
+    async def run_operation(self, label, operation, form, focus, success, form_focus):
         def execute():
             with self.manager.store.lock():
                 return operation()
@@ -898,6 +901,8 @@ class MihomoApp(App):
             if self.is_running:
                 self.update_nodes()
                 self.update_buttons()
+                if form and self.screen is form and form_focus:
+                    form_focus.focus()
                 # A refresh started before this operation must never overwrite its result.
                 self.action_refresh()
 
@@ -1021,7 +1026,7 @@ class MihomoApp(App):
                     [
                         ("proxy-port", "代理端口", str(settings["proxy_port"]), False),
                         (
-                            "controller-port", "管理 / Web 端口",
+                            "controller-port", "管理端口",
                             str(settings["controller_port"]), False,
                         ),
                         ("mode", "模式：rule / global / direct", settings["mode"], False),
