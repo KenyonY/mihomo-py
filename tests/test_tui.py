@@ -248,6 +248,16 @@ rules: ["MATCH,DIRECT"]
         await pilot.pause()
         assert app.group_name == "代理 [group]"
         assert app.query_one("#node-table").region.height >= 4
+        table = app.query_one("#node-table", DataTable)
+        table.move_cursor(row=0, column=1)
+        await pilot.pause()
+        await pilot.click("#node-table", offset=(8, 2))
+        await settled(app, pilot)
+        assert app.current_node() == "REJECT"
+        assert Controller(real_core.engine).proxies()["代理 [group]"]["now"] == "DIRECT"
+        await pilot.click("#node-table", offset=(8, 2))
+        await settled(app, pilot)
+        assert Controller(real_core.engine).proxies()["代理 [group]"]["now"] == "REJECT"
         await pilot.click("#filter")
         await pilot.press("R", "E", "J")
         assert app.node_names == ["REJECT"]

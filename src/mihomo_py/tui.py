@@ -42,6 +42,7 @@ class StableTable(DataTable):
 
     async def _on_click(self, event: events.Click) -> None:
         # Browsing a subscription must not apply it, even on repeated clicks.
+        # Other tables keep Textual's automatic base-handler dispatch.
         if self.id == "subs":
             event.prevent_default()  # Textual otherwise invokes the base handler again.
             with self.prevent(DataTable.RowSelected):
