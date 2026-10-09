@@ -41,6 +41,45 @@ def process_identity(pid):
         return None
 
 
+def command_matches(cmdline, command):
+    """Match the core command, including the documented binfmt QEMU argv wrapper."""
+    if cmdline == command:
+        return True
+    wrapper = Path(cmdline[0]).name if cmdline else ""
+    known_wrappers = {"qemu-aarch64", "qemu-arm", "qemu-x86_64", "qemu-i386"}
+    if wrapper in known_wrappers and cmdline[1:] == command:
+        return True
+    if len(cmdline) < len(command) + 2:
+        return False
+    if wrapper not in known_wrappers:
+        return False
+    return cmdline[-len(command) :] == command and cmdline[-len(command) - 1] == command[0]
+
+
+def command_from_cmdline(cmdline):
+    wrapper = Path(cmdline[0]).name if cmdline else ""
+    if wrapper in {"qemu-aarch64", "qemu-arm", "qemu-x86_64", "qemu-i386"}:
+        command = cmdline[1:]
+        if len(command) > 1 and command[0] == command[1]:
+            command = command[1:]
+        return command
+    return cmdline
+
+
+def identity_matches(identity, expected, data_dir=None, runtime_path=None):
+    command = command_from_cmdline(expected["cmdline"]) if expected else None
+    command_args = ["-d", data_dir, "-f", str(runtime_path)] if data_dir else None
+    return (
+        identity
+        and expected
+        and identity["start_ticks"] == expected["start_ticks"]
+        and identity["boot_id"] == expected["boot_id"]
+        and command
+        and (command_args is None or command[-4:] == command_args)
+        and command_matches(identity["cmdline"], command)
+    )
+
+
 class Engine:
     def __init__(self, root, binary=None, timeout=20):
         self.root = root
@@ -178,11 +217,12 @@ class Engine:
 
     def running(self):
         record = self.record()
-        if record and process_identity(record["pid"]) == record["identity"]:
-            # Do not trust a PID alone, even if it now points at another mihomo instance.
-            expected = ["-d", record["data_dir"], "-f", str(self.runtime_path)]
-            if record["identity"]["cmdline"][1:] == expected:
-                return record
+        # Do not trust a PID alone, even if it now points at another mihomo instance.
+        expected = record["identity"] if record else None
+        if record and identity_matches(
+            process_identity(record["pid"]), expected, record["data_dir"], self.runtime_path
+        ):
+            return record
         return None
 
     def stop(self):
@@ -195,7 +235,12 @@ class Engine:
         except ProcessLookupError:
             return False
         try:
-            if process_identity(record["pid"]) != record["identity"]:
+            if not identity_matches(
+                process_identity(record["pid"]),
+                record["identity"],
+                record["data_dir"],
+                self.runtime_path,
+            ):
                 return False
             pidfd.send_signal(fd, signal.SIGTERM)
             poller = select.poll()
@@ -236,18 +281,19 @@ class Engine:
                     ) from exc
 
     def healthy(self, record):
+        timeout = float(os.environ.get("MIHOMO_PY_HEALTHY_TIMEOUT", "0.3"))
         request = urllib.request.Request(
             f"http://127.0.0.1:{record['settings']['controller_port']}/version",
             headers={"Authorization": f"Bearer {record['secret']}"},
         )
         try:
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            with opener.open(request, timeout=0.3) as response:
+            with opener.open(request, timeout=timeout) as response:
                 payload = json.load(response)
                 if not isinstance(payload, dict) or not isinstance(payload.get("version"), str):
                     return False
             with socket.create_connection(
-                ("127.0.0.1", record["settings"]["proxy_port"]), 0.3
+                ("127.0.0.1", record["settings"]["proxy_port"]), timeout
             ) as sock:
                 sock.sendall(b"\x05\x01\x00")
                 return sock.recv(2) == b"\x05\x00"
@@ -286,7 +332,7 @@ class Engine:
             # Persist only a complete identity, or later stop/status cannot recognize it.
             while time.monotonic() < deadline and child.poll() is None:
                 identity = process_identity(child.pid)
-                if identity and identity["cmdline"] == command:
+                if identity and command_matches(identity["cmdline"], command):
                     record["identity"] = identity
                     break
                 time.sleep(0.01)

@@ -166,6 +166,29 @@ def test_foreign_pid_is_never_stopped(tmp_path):
         process.wait()
 
 
+def test_qemu_binfmt_command_identity_matches_only_known_wrapper():
+    from mihomo_py.engine import command_matches, identity_matches
+
+    command = ["/opt/mihomo", "-d", "/tmp/state", "-f", "/tmp/runtime.yaml"]
+    assert command_matches(command, command)
+    assert command_matches(["/usr/bin/qemu-aarch64", *command], command)
+    assert command_matches(["/usr/bin/qemu-aarch64", *command[:1], *command], command)
+    assert not command_matches(["/tmp/unknown-wrapper", *command], command)
+    assert not command_matches(["/usr/bin/qemu-aarch64", *command[:-1], "other.yaml"], command)
+    original = {
+        "start_ticks": "10",
+        "boot_id": "boot",
+        "cmdline": ["/usr/bin/qemu-aarch64", *command],
+    }
+    current = {
+        "start_ticks": "10",
+        "boot_id": "boot",
+        "cmdline": ["/usr/bin/qemu-aarch64", *command[:1], *command],
+    }
+    assert identity_matches(current, original)
+    assert not identity_matches({**current, "start_ticks": "11"}, original)
+
+
 def test_logs_follow_json(command, tmp_path):
     root = tmp_path / "home"
     root.mkdir()

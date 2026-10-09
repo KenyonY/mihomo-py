@@ -46,7 +46,7 @@ MIHOMO_BUILD_ARCH=aarch64 python -m build --wheel --installer uv
 - 新虚拟环境只用 pip 镜像或本地 wheelhouse 安装完整依赖，不使用已有 mihomo 或用户数据。
 - 真实内核在 `geodata-mode: false/true` 下校验 `GEOIP`、`GEOSITE`、`IP-ASN`，并完成启动、健康检查、代理访问本地 HTTP 服务、停止。
 - 安装和首次启动期间阻断/审计外部联网，证明没有隐藏下载。Python mock 无法证明 Go 内核没有联网。
-- aarch64 wheel 已通过 QEMU 启动的完整 AArch64 Linux 虚拟机验证：ARM Python、`pip check`、两种 GEO 模式下的真实内核校验、启动、代理访问和停止均成功。该结果验证了 ARM 镜像运行链路；仍建议发布前在真实 ARM 主机上做一次性能和内核兼容性检查。
+- aarch64 wheel 已通过 x86 主机上的 binfmt/QEMU ARM 容器和完整 AArch64 Linux 虚拟机验证：ARM Python、`pip check`、两种 GEO 模式下的真实内核校验、启动、代理访问和停止均成功。该结果验证了 ARM 镜像运行链路；仍建议发布前在真实 ARM 主机上做一次性能和内核兼容性检查。
 
 可在全新环境中运行 `python scripts/check_install.py`，验证包内资源、两种 GEO 模式以及真实 CLI 的校验、启动、本地代理访问和停止。使用该环境的 Python，避免误用开发环境的 editable 安装；可通过 `strace -f -e trace=network -o network.log` 包裹命令审计 Python 和 Go 子进程。
 

@@ -39,6 +39,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="mihomo-install-") as temporary:
         root = Path(temporary)
         env = dict(os.environ, HOME=temporary, PATH=str(Path(sys.executable).parent))
+        timeout = os.environ.get("MIHOMO_PY_CHECK_TIMEOUT", "30")
+        env["MIHOMO_PY_HEALTHY_TIMEOUT"] = os.environ.get("MIHOMO_PY_HEALTHY_TIMEOUT", "5")
         for name in ("MIHOMO_PY_BINARY", "MIHOMO_PY_GEODATA_DIR", "XDG_CONFIG_HOME"):
             env.pop(name, None)
         server = ThreadingHTTPServer(("127.0.0.1", 0), Origin)
@@ -50,7 +52,16 @@ def main():
 
                 def cli(*args):
                     result = subprocess.run(
-                        [sys.executable, "-m", "mihomo_py", "--data-dir", str(state), *args],
+                        [
+                            sys.executable,
+                            "-m",
+                            "mihomo_py",
+                            "--timeout",
+                            timeout,
+                            "--data-dir",
+                            str(state),
+                            *args,
+                        ],
                         env=env,
                         capture_output=True,
                         text=True,
@@ -82,7 +93,11 @@ def main():
                 cli("sub", "use", "offline")
                 try:
                     started = cli("core", "start")
-                    assert started["healthy"]
+                    if not started["healthy"]:
+                        raise RuntimeError(
+                            "mihomo-py core start returned unhealthy:\n"
+                            + (state / "core.log").read_text()
+                        )
                     assert cli("core", "status")["healthy"]
                     connection = http.client.HTTPConnection(
                         "127.0.0.1",
