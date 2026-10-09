@@ -55,8 +55,13 @@ def main():
                         capture_output=True,
                         text=True,
                         timeout=30,
-                        check=True,
+                        check=False,
                     )
+                    if result.returncode:
+                        raise RuntimeError(
+                            f"mihomo-py {' '.join(args)} failed ({result.returncode}):\n"
+                            f"{result.stdout}\n{result.stderr}"
+                        )
                     return json.loads(result.stdout)
 
                 source = root / "source.yaml"
