@@ -9,7 +9,8 @@ from pathlib import Path
 from .errors import AppError
 
 DEFAULT_SETTINGS = {
-    "host": "127.0.0.1", "proxy_port": 7897, "controller_port": 9090, "mode": "rule"
+    "host": "127.0.0.1", "controller_host": "0.0.0.0",
+    "proxy_port": 7897, "controller_port": 9090, "mode": "rule"
 }
 
 
@@ -27,11 +28,17 @@ def proxy_address(settings):
     return "127.0.0.1" if settings["host"] == "0.0.0.0" else settings["host"]
 
 
+def controller_address(settings):
+    host = settings["controller_host"]
+    return "127.0.0.1" if host == "0.0.0.0" else host
+
+
 def valid_settings(settings):
     return (
         isinstance(settings, dict)
         and set(settings) == set(DEFAULT_SETTINGS)
         and valid_host(settings["host"])
+        and valid_host(settings["controller_host"])
         and all(
             type(settings[key]) is int and 1 <= settings[key] <= 65535
             for key in ("proxy_port", "controller_port")
@@ -71,9 +78,10 @@ class Store:
             return {"version": 1, "selected": None, "settings": dict(DEFAULT_SETTINGS), "subs": {}}
         try:
             state = json.loads(path.read_text())
-            # Version 0.1.0 stored only ports and mode.
+            # Released settings predate the configurable proxy / controller binds.
             if isinstance(state, dict) and isinstance(state.get("settings"), dict):
                 state["settings"].setdefault("host", DEFAULT_SETTINGS["host"])
+                state["settings"].setdefault("controller_host", DEFAULT_SETTINGS["controller_host"])
             if not (
                 state["version"] == 1
                 and isinstance(state["subs"], dict)

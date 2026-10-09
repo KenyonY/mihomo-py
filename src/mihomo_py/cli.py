@@ -282,17 +282,22 @@ def host_option(ctx, param, value):
 
 @config.command("set")
 @click.option("--host", callback=host_option, help="代理监听 IPv4 地址；0.0.0.0 监听所有接口。")
+@click.option(
+    "--controller-host", callback=host_option,
+    help="管理 API / Web 监听 IPv4 地址；默认 0.0.0.0。",
+)
 @click.option("--proxy-port", type=click.IntRange(1, 65535))
 @click.option("--controller-port", type=click.IntRange(1, 65535))
 @click.option("--mode", type=click.Choice(["rule", "global", "direct"]))
 @click.option("--dry-run", is_flag=True)
 @click.pass_context
-def config_set(ctx, host, proxy_port, controller_port, mode, dry_run):
+def config_set(ctx, host, controller_host, proxy_port, controller_port, mode, dry_run):
     """保存本机设置；内核运行时重启应用，失败则恢复旧配置。"""
     values = {
         key: value
         for key, value in {
             "host": host,
+            "controller_host": controller_host,
             "proxy_port": proxy_port,
             "controller_port": controller_port,
             "mode": mode,
@@ -366,6 +371,13 @@ def core_logs(ctx, lines, follow):
             recent = stream.readlines()
             if not recent:
                 time.sleep(0.2)
+
+
+@core.command("web")
+@click.pass_context
+def core_web(ctx):
+    """显示运行中面板地址和登录密钥（敏感信息，请勿分享输出）。"""
+    emit(ctx.obj["manager"].web(), ctx.obj["format"])
 
 
 def main():

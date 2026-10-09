@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from mihomo_py.bundle import ASSET_ROOT, core_path
+from mihomo_py.bundle import ASSET_ROOT, core_path, dashboard_root
 from mihomo_py.config import render
 from mihomo_py.engine import Engine
 from mihomo_py.errors import AppError
@@ -36,6 +36,15 @@ def test_bundle_hashes_and_real_version():
         assert hashlib.sha256(path.read_bytes()).hexdigest() == asset["sha256"]
     result = subprocess.run([core_path(), "-v"], capture_output=True, text=True, check=True)
     assert manifest["core_version"] in result.stdout
+
+
+def test_optional_dashboard_hashes():
+    root = dashboard_root()
+    assert root is not None, "Development tests need: pip install -e ./web"
+    manifest = json.loads((root / "manifest.json").read_text())
+    for asset in manifest["assets"]:
+        assert hashlib.sha256((root / asset["path"]).read_bytes()).hexdigest() == asset["sha256"]
+    assert not (ASSET_ROOT / "zashboard.zip").exists()
 
 
 @pytest.mark.parametrize("geodata_mode", [False, True])

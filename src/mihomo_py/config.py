@@ -112,10 +112,9 @@ def parse(content):
     return value
 
 
-def render(content, settings, secret):
+def render(content, settings, secret, *, dashboard=None):
     config = copy.deepcopy(parse(content))
-    # Local settings own the mixed proxy; the authenticated controller stays on loopback.
-    # Subscription updates cannot enable extra listeners, TUN, or public controllers.
+    # Local settings own both listeners and the bundled UI. Subscriptions cannot expose them.
     for key in (
         "external-doh-server",
         "iptables",
@@ -142,7 +141,7 @@ def render(content, settings, secret):
             "tproxy-port": 0,
             "allow-lan": settings["host"] != "127.0.0.1",
             "bind-address": settings["host"],
-            "external-controller": f"127.0.0.1:{settings['controller_port']}",
+            "external-controller": f"{settings['controller_host']}:{settings['controller_port']}",
             "secret": secret,
             "mode": settings["mode"],
             "tun": {"enable": False},
@@ -151,6 +150,8 @@ def render(content, settings, secret):
             "geo-auto-update": False,
         }
     )
+    if dashboard is not None:
+        config["external-ui"] = dashboard
     dns = config.get("dns")
     if isinstance(dns, dict):
         dns.pop("listen", None)

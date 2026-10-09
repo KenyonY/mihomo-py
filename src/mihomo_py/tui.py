@@ -23,6 +23,7 @@ from textual.widgets import (
     TabPane,
 )
 
+from .bundle import dashboard_root
 from .controller import DEFAULT_TEST_URL, Controller, instance_id
 from .errors import AppError
 from .store import valid_host
@@ -348,6 +349,7 @@ class MihomoApp(App):
             yield Button("停止", id="stop", variant="error")
             yield Button("重启", id="restart")
             yield Button("设置", id="settings")
+            yield Button("Web 面板", id="web")
             yield Button("刷新", id="refresh")
         with TabbedContent():
             with TabPane("1 订阅", id="subscriptions"):
@@ -807,7 +809,10 @@ class MihomoApp(App):
             self.query_one("#sub-hint", Static).update(
                 f"{len(self.sub_names)} 个订阅 · 单击选择 · {action}{warning_hint} · i 详情"
             )
-            disabled.update(start=not status["selected"], stop=not running, restart=not running)
+            disabled.update(
+                start=not status["selected"], stop=not running, restart=not running,
+                web=not running or dashboard_root() is None,
+            )
             for key in ("use", "update", "edit", "remove"):
                 disabled[key] = not self.current_sub()
             disabled["remove"] = not self.current_sub() or (
@@ -1027,13 +1032,17 @@ class MihomoApp(App):
                     [
                         ("proxy-port", "代理端口", str(settings["proxy_port"]), False),
                         (
-                            "controller-port", "管理端口",
+                            "controller-port", "管理 / Web 端口",
                             str(settings["controller_port"]), False,
                         ),
                         ("mode", "模式：rule / global / direct", settings["mode"], False),
                         (
                             "host", "代理监听 IPv4 地址（0.0.0.0 为所有接口）",
                             settings["host"], False,
+                        ),
+                        (
+                            "controller-host", "管理 / Web IPv4 地址（0.0.0.0 为所有接口）",
+                            settings["controller_host"], False,
                         ),
                     ],
                     self.save_settings,
@@ -1046,6 +1055,8 @@ class MihomoApp(App):
                     },
                 )
             )
+        elif button == "web":
+            self.run_worker(self.show_web(), group="web", exclusive=True)
         elif button == "select-node":
             self.select_node()
         elif button == "test-node" and self.current_node():
@@ -1096,16 +1107,33 @@ class MihomoApp(App):
             if self.is_running:
                 self.show_error(error, operation="读取订阅来源")
 
+    async def show_web(self):
+        try:
+            info = await asyncio.to_thread(self.manager.web)
+            if self.is_running and not isinstance(self.screen, ModalScreen):
+                self.show_dialog(Details(
+                    "Web 面板（密钥请勿分享）",
+                    f"{info['url']}\n\n监听：{info['listen_host']}:{info['port']}\n"
+                    f"登录密钥：{info['secret']}\n\n{info['hint']}\n"
+                    "远程访问请在设置中修改管理 / Web 监听地址。",
+                ))
+        except Exception as error:
+            if self.is_running:
+                self.show_error(error)
 
     @on(DataTable.RowHighlighted)
     def row_highlighted(self):
         self.update_buttons()
 
     def save_settings(self, values, form):
-        if not valid_host(values["host"]):
-            form.field_error("host", "须为 IPv4 地址，例如 127.0.0.1 或 0.0.0.0。")
-            return
-        settings = {"mode": values["mode"], "host": values["host"]}
+        for key in ("host", "controller-host"):
+            if not valid_host(values[key]):
+                form.field_error(key, "须为 IPv4 地址，例如 127.0.0.1 或 0.0.0.0。")
+                return
+        settings = {
+            "mode": values["mode"], "host": values["host"],
+            "controller_host": values["controller-host"],
+        }
         for key in ("proxy-port", "controller-port"):
             try:
                 value = int(values[key])

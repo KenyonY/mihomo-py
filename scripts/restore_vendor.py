@@ -1,5 +1,6 @@
 """Maintainer-only asset restoration; pip/build/runtime never invoke this script."""
 
+import argparse
 import gzip
 import hashlib
 import json
@@ -8,7 +9,11 @@ from pathlib import Path
 
 
 def main():
-    root = Path(__file__).resolve().parents[1] / "src/mihomo_py/_vendor"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--web", action="store_true", help="Restore optional dashboard resources.")
+    args = parser.parse_args()
+    repository = Path(__file__).resolve().parents[1]
+    root = repository / ("web/src/mihomo_py_web/_vendor" if args.web else "src/mihomo_py/_vendor")
     manifest = json.loads((root / "manifest.json").read_text())
     for asset in manifest["assets"]:
         path = root / asset["path"]

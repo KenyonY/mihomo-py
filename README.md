@@ -1,6 +1,6 @@
 # mihomo-py
 
-面向 Linux 服务器的 mihomo CLI / TUI 客户端，支持订阅管理、节点切换和延迟测试、配置校验、独立本机设置及后台进程管理。
+面向 Linux 服务器的 mihomo CLI / TUI 客户端，可选 zashboard Web 面板，支持订阅管理、节点切换和延迟测试、配置校验、独立本机设置及后台进程管理。
 
 需要 Python 3.11+、Linux（支持 pidfd 的内核，5.3+），支持 x86_64 / aarch64。支持系统 Python 和 Conda：Python 缺少原生 pidfd 接口时，通过标准库 ctypes 调用相同的 Linux 系统接口，不需要编译器或切换 Python；容器须允许这些系统调用。已用系统 Python 3.12.3、Conda Python 3.12.4、Textual 8.2.8、mihomo v1.19.19 验证（x86_64）。发行包内置 mihomo 内核与默认地理数据库；systemd 和 TUN 是后续阶段。
 
@@ -42,9 +42,24 @@ mihomo-py core stop
 mihomo-py config set --host 0.0.0.0
 ```
 
-`host` 是代理监听 IPv4 地址，默认 `127.0.0.1`；`0.0.0.0` 允许通过本机各网络接口访问 HTTP/SOCKS 代理。运行中修改会重启内核，管理 API 仍监听 `127.0.0.1`。
+`host` 是代理监听 IPv4 地址，默认 `127.0.0.1`；`0.0.0.0` 允许通过本机各网络接口访问 HTTP/SOCKS 代理。管理 API / Web 面板由独立的 `controller_host` 设置控制，默认是 `0.0.0.0`。运行中修改会重启内核。
 
-安装只需要可用的 pip 镜像源：内核和默认 GEO 数据已包含在 wheel / 源码发行包中，安装、构建和首次准备这些资源不访问 GitHub 或其他下载站。镜像需要同步本项目的发行包及 Python 依赖。默认使用包内内核；如需覆盖，设置 `MIHOMO_PY_BINARY=/path/to/mihomo` 或使用全局选项 `--core-binary`（显式传入 `mihomo` 才会查找 PATH）。
+## Web 面板
+
+先安装可选资源：`pip install 'mihomo-py[web]'`（开发目录使用 `pip install -e ./web` 后 `pip install -e '.[web]'`）。启动或重启内核后，在 TUI 点击「Web 面板」查看地址和登录密钥，或运行：
+
+```bash
+mihomo-py config set --controller-host 0.0.0.0 --controller-port 19090
+mihomo-py --format table core web
+```
+
+其他设备打开 `http://服务器IP:19090/ui/`，在面板的 Password / 密码字段填写上述密钥并保存。例如：`http://100.83.37.33:19090/ui/`。`0.0.0.0` 是监听地址，浏览器使用服务器的实际 IP。修改代理 `host` 不会开放面板。
+
+zashboard v3.29.1 的静态资源通过可选资源包提供，使用系统字体，不需要 GitHub、CDN 或额外 Web 服务。页面请求限制到当前内核地址，关闭默认更新、外部 IP 和连通性检查。密钥不会出现在网页资源或普通状态输出中，重启后保持有效；`core web` 输出包含密钥，请勿分享。设置 `0.0.0.0` 会同时开放带密钥验证的管理 API，请在可信网络访问。
+
+Web 面板管理当前内核的节点、规则、流量和连接；本项目的订阅来源和启动设置仍由 CLI/TUI 管理。详见 [Web 面板说明](docs/web.md)。
+
+安装只需要可用的 pip 镜像源：内核和默认 GEO 数据已包含在 wheel / 源码发行包中，安装、构建和首次准备这些资源不访问 GitHub 或其他下载站。镜像需要同步本项目的发行包及 Python 依赖；安装 `[web]` 时还需要 `mihomo-py-web` 资源包。默认使用包内内核；如需覆盖，设置 `MIHOMO_PY_BINARY=/path/to/mihomo` 或使用全局选项 `--core-binary`（显式传入 `mihomo` 才会查找 PATH）。
 
 远程订阅、自定义 `geox-url`、远程 rule/proxy providers 不属于内置资源，仍需可达或提前提供本地文件。默认 GEO 自动更新关闭，避免启动后触发外网更新。详见 [离线安装与发行](docs/packaging.md)。
 
@@ -92,6 +107,7 @@ unset SUB_URL
 | `core stop` | 停止本实例；重复执行安全 |
 | `core status` | 显示 PID、健康状态、已选订阅、实际运行订阅和设置 |
 | `core logs [--lines 100] [--follow]` | 查看内核日志 |
+| `core web` | 显示面板地址和登录密钥，须安装 `[web]` |
 | `node list [--group GROUP]` | 列出代理组，或指定组的节点、选择和最近延迟 |
 | `node use NAME --group GROUP` | 按完整名称切换手动组节点，无需重启 |
 | `node test NAME [--url URL] [--timeout-ms 5000]` | 测量一个节点的 HTTP 延迟，默认超时 5 秒 |
@@ -106,6 +122,7 @@ unset SUB_URL
 state.json        # 订阅来源、缓存 YAML 原文、当前选择、本机设置（原子替换）
 runtime.yaml      # 由缓存原文与本机设置生成的实际配置
 process.json      # PID、Linux 启动标识、命令行、实际运行设置
+controller-secret # 持久化的管理 / Web 登录密钥（0600）
 core.log          # 内核日志，追加写入
 validation.log    # 最近一次内核校验失败或超时的详细输出
 geodata/          # 可选：手动放置离线地理数据库，供新订阅复制使用
@@ -114,7 +131,7 @@ core-data/        # 按订阅隔离的内核数据、provider 和节点选择缓
 
 目录默认权限 0700；客户端写入的状态、配置和日志文件为 0600。缓存包含订阅凭证，列举订阅时仅展示脱敏地址。
 
-本机设置默认代理监听地址 `127.0.0.1`、代理端口 `7897`、管理端口 `9090`、路由模式 `rule`。模式可选 `rule/global/direct`。HTTP/SOCKS 共用代理端口，监听地址由本机 `host` 设置决定；管理接口固定监听 `127.0.0.1` 并使用随机密钥。当前固定禁用订阅携带的其他入站端口、自定义 listeners/tunnels、TUN、DNS/DoH 监听、iptables 接管、NTP 与外部 UI，保留节点、代理组、规则、DNS 解析配置，并启用节点选择缓存。代理端口不启用用户名密码验证。后续阶段再提供显式的入站和网络接管配置。
+本机设置默认代理监听地址 `127.0.0.1`、代理端口 `7897`、管理端口 `9090`、路由模式 `rule`。模式可选 `rule/global/direct`。HTTP/SOCKS 共用代理端口，监听地址由本机 `host` 设置决定；管理接口由 `controller_host` 控制，默认监听 `0.0.0.0`，使用持久化的随机密钥；安装 `[web]` 后提供面板。当前固定禁用订阅携带的其他入站端口、自定义 listeners/tunnels、TUN、DNS/DoH 监听、iptables 接管、NTP 及订阅指定的外部 UI，保留节点、代理组、规则、DNS 解析配置，并启用节点选择缓存。代理端口不启用用户名密码验证。后续阶段再提供显式的入站和网络接管配置。
 
 订阅原文不会被本机设置改写；更新后重新合成运行配置。下载默认直连，不使用 `HTTP_PROXY/HTTPS_PROXY`；上限 8 MiB、网络操作超时 20 秒。HTTPS 连接在 TCP 或 TLS 失败时尝试域名的其他地址，每个连接/握手阶段最多等待 5 秒，地址尝试共用 20 秒预算；始终校验证书与原始域名。订阅下载超时自动重试一次，并在 TUI 中提示。使用 `mihomo -t` 校验合成配置；默认 GEO 数据由包内资源提供；订阅自定义的数据和规则源仍可能触发下载。内核校验/启动超时可用全局 `--timeout 60` 调整。
 
@@ -154,7 +171,7 @@ mihomo-py config set --mode direct --dry-run
 ## 开发与验证
 
 ```bash
-pip install -e '.[dev]'
+pip install -e ./web -e '.[dev,web]'
 pytest
 ruff check .
 python -m build --installer uv

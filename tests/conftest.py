@@ -52,7 +52,10 @@ def real_core(tmp_path):
     manager = Manager(tmp_path / "home", binary, timeout=5)
     proxy_port, controller_port = free_ports()
     with manager.store.lock():
-        manager.configure({"proxy_port": proxy_port, "controller_port": controller_port})
+        manager.configure({
+            "proxy_port": proxy_port, "controller_port": controller_port,
+            "controller_host": "127.0.0.1",
+        })
     yield manager
     with manager.store.lock():
         manager.engine.stop()

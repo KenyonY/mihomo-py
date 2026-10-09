@@ -16,5 +16,5 @@ The GeoLite2 Country and ASN data incorporate GeoLite2 data created by MaxMind,
 available from https://www.maxmind.com (CC BY-SA 4.0).
 https://creativecommons.org/licenses/by-sa/4.0/
 
-These resources are separate upstream works. They are distributed unchanged.
+These resources are separate upstream works. Binaries and data are distributed unchanged.
 No resource is fetched automatically during installation, build, or default GEO setup.

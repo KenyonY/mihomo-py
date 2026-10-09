@@ -1,10 +1,11 @@
 import copy
 from datetime import datetime, timezone
 
-from .config import check_name, fetch, normalize_source, source_label
+from .bundle import dashboard_root
+from .config import check_name, fetch, normalize_source, parse, source_label
 from .engine import Engine, fingerprint
 from .errors import AppError
-from .store import Store, valid_host
+from .store import Store, controller_address, valid_host
 
 
 class Manager:
@@ -48,6 +49,29 @@ class Manager:
             "running_settings": running["settings"] if running else None,
             "healthy": self.engine.healthy(running) if running else False,
             "data_dir": str(self.store.root),
+        }
+
+    def web(self):
+        record = self.engine.running()
+        if not record:
+            raise AppError("core_stopped", "内核未运行。", 3, "先运行 core start。")
+        if dashboard_root() is None:
+            raise AppError(
+                "web_missing", "尚未安装 Web 面板资源。", 3,
+                "运行 pip install 'mihomo-py[web]'，然后 core restart。",
+            )
+        if not parse(self.engine.runtime_path.read_text()).get("external-ui"):
+            raise AppError(
+                "web_restart_required", "当前内核尚未加载 Web 面板。", 5,
+                "安装 [web] 后运行 core restart，再打开 Web 面板。",
+            )
+        settings = record["settings"]
+        return {
+            "url": f"http://{controller_address(settings)}:{settings['controller_port']}/ui/",
+            "listen_host": settings["controller_host"],
+            "port": settings["controller_port"],
+            "secret": record["secret"],
+            "hint": "从其他设备访问时，将 URL 中的地址换成服务器 IP；登录时填写此密钥。",
         }
 
     def commit(self, new):
@@ -126,8 +150,9 @@ class Manager:
         old = self.store.read()
         new = copy.deepcopy(old)
         new["settings"].update(values)
-        if not valid_host(new["settings"]["host"]):
-            raise AppError("invalid_host", "代理监听地址须为 IPv4 地址，例如 0.0.0.0。", 2)
+        for key in ("host", "controller_host"):
+            if not valid_host(new["settings"][key]):
+                raise AppError("invalid_host", "监听地址须为 IPv4 地址，例如 0.0.0.0。", 2)
         if new["settings"]["proxy_port"] == new["settings"]["controller_port"]:
             raise AppError("invalid_ports", "代理端口和管理端口必须不同。", 2)
         self.commit(new)

@@ -738,7 +738,7 @@ async def test_last_text_field_enter_saves_settings(tmp_path):
         await pilot.click("#settings")
         app.screen.query_one("#proxy-port", Input).value = "17897"
         app.screen.query_one("#mode", Select).value = "direct"
-        app.screen.query_one("#host", Input).focus()
+        app.screen.query_one("#controller-host", Input).focus()
         await pilot.press("enter")
         await settled(app, pilot)
         assert not isinstance(app.screen, Form)

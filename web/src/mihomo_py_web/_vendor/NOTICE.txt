@@ -1,0 +1,9 @@
+zashboard v3.29.1 (dist-no-fonts.zip)
+Copyright: Zephyruso and zashboard contributors
+License: MIT (see licenses/zashboard.txt)
+Source: https://github.com/Zephyruso/zashboard/tree/v3.29.1
+Release: https://github.com/Zephyruso/zashboard/releases/tag/v3.29.1
+Third-party dependency attribution is included in the archive as THIRD_PARTY_NOTICES.md.
+The archive is unchanged. The served index adds a local integration script and CSP;
+the integration source is mihomo_py_web/web_bootstrap.js.
+

@@ -15,11 +15,17 @@ import urllib.request
 from pathlib import Path
 
 from . import pidfd
-from .bundle import core_path
+from .bundle import core_path, seed_dashboard
 from .config import parse, render
 from .errors import AppError
 from .geodata import check_geodata, geodata_transaction, seed_geodata
-from .store import DEFAULT_SETTINGS, atomic_write, proxy_address, valid_settings
+from .store import (
+    DEFAULT_SETTINGS,
+    atomic_write,
+    controller_address,
+    proxy_address,
+    valid_settings,
+)
 
 
 def fingerprint(content, settings):
@@ -143,13 +149,14 @@ class Engine:
         if progress:
             progress("订阅已读取，正在准备地理数据…")
         copied = seed_geodata(self.root, data_dir, config)
+        dashboard = seed_dashboard(data_dir)
         if progress:
             prefix = f"已复用 {len(copied)} 个地理数据文件，" if copied else "订阅已读取，"
             progress(prefix + "正在校验配置…")
         fd, temporary = tempfile.mkstemp(prefix=".check-", suffix=".yaml", dir=self.root)
         try:
             with os.fdopen(fd, "w") as stream:
-                stream.write(render(content, settings, "validation-only"))
+                stream.write(render(content, settings, "validation-only", dashboard=dashboard))
             try:
                 result = subprocess.run(
                     [binary, "-t", "-d", str(data_dir), "-f", temporary],
@@ -196,6 +203,9 @@ class Engine:
             record = json.loads(self.record_path.read_text())
             if isinstance(record, dict) and isinstance(record.get("settings"), dict):
                 record["settings"].setdefault("host", DEFAULT_SETTINGS["host"])
+                record["settings"].setdefault(
+                    "controller_host", "127.0.0.1"  # Old cores actually bound loopback.
+                )
             if type(record["pid"]) is not int or record["pid"] <= 1:
                 raise ValueError
             identity = record["identity"]
@@ -263,7 +273,7 @@ class Engine:
         return {
             (settings["host"], socket.SOCK_STREAM, settings["proxy_port"]),
             (settings["host"], socket.SOCK_DGRAM, settings["proxy_port"]),
-            ("127.0.0.1", socket.SOCK_STREAM, settings["controller_port"]),
+            (settings["controller_host"], socket.SOCK_STREAM, settings["controller_port"]),
         }
 
     def check_ports(self, settings, previous=None):
@@ -292,7 +302,8 @@ class Engine:
     def healthy(self, record):
         timeout = float(os.environ.get("MIHOMO_PY_HEALTHY_TIMEOUT", "0.3"))
         request = urllib.request.Request(
-            f"http://127.0.0.1:{record['settings']['controller_port']}/version",
+            f"http://{controller_address(record['settings'])}:"
+            f"{record['settings']['controller_port']}/version",
             headers={"Authorization": f"Bearer {record['secret']}"},
         )
         try:
@@ -374,8 +385,17 @@ class Engine:
         self.validate(content, settings, name)
         old = self.running()
         previous = self.runtime_path.read_text() if old else None
-        secret = secrets.token_urlsafe(32)
-        compiled = render(content, settings, secret)
+        # Browser credentials survive restarts and subscription switches.
+        secret_path = self.root / "controller-secret"
+        if secret_path.exists():
+            secret = secret_path.read_text().strip()
+            if not secret or any(character.isspace() for character in secret):
+                raise AppError("invalid_secret", "controller-secret 无效，请恢复备份。")
+        else:
+            secret = old["secret"] if old else secrets.token_urlsafe(32)
+            atomic_write(secret_path, secret + "\n")
+        dashboard = seed_dashboard(self.data_dir(name, parse(content)))
+        compiled = render(content, settings, secret, dashboard=dashboard)
         # Check changed ports before stopping the working instance.
         if old:
             self.check_ports(settings, previous=old["settings"])

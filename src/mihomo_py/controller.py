@@ -7,6 +7,7 @@ import urllib.request
 
 from .config import normalize_source
 from .errors import AppError
+from .store import controller_address
 
 DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204"
 
@@ -41,7 +42,8 @@ class Controller:
         if instance_id(self.engine.running()) != self.instance:
             self.stale()
         request = urllib.request.Request(
-            f"http://127.0.0.1:{self.record['settings']['controller_port']}{path}",
+            f"http://{controller_address(self.record['settings'])}:"
+            f"{self.record['settings']['controller_port']}{path}",
             data=json.dumps(body, ensure_ascii=False).encode() if body is not None else None,
             method=method,
             headers={

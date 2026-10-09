@@ -5,6 +5,7 @@ import sys
 
 import pytest
 
+from mihomo_py import __version__
 from mihomo_py.config import fetch, normalize_source, render
 from mihomo_py.errors import AppError
 from mihomo_py.store import Store
@@ -12,7 +13,7 @@ from mihomo_py.store import Store
 
 def test_discovery_and_read_only_commands(command, tmp_path):
     assert "sub" in command("--help").stdout
-    assert "0.1.1" in command("--version").stdout
+    assert __version__ in command("--version").stdout
     assert json.loads(command("sub", "list").stdout) == []
     assert json.loads(command("core", "status").stdout)["running"] is False
     assert json.loads(command("config", "show").stdout)["proxy_port"] == 7897
@@ -31,6 +32,7 @@ def test_discovery_and_read_only_commands(command, tmp_path):
         ["sub", "set", "test", "https://example.com/token-secret", "--dry-run"],
         ["config", "set", "--mode", "direct", "--dry-run"],
         ["config", "set", "--host", "0.0.0.0", "--dry-run"],
+        ["config", "set", "--controller-host", "0.0.0.0", "--dry-run"],
     ],
 )
 def test_dry_run_has_no_side_effect(command, tmp_path, args):
@@ -46,10 +48,12 @@ def test_dry_run_has_no_side_effect(command, tmp_path, args):
         (["unknown"], "usage_error", 2),
         (["sub", "remove", "test"], "confirmation_required", 2),
         (["core", "start"], "not_found", 3),
+        (["core", "web"], "core_stopped", 3),
         (["config", "set"], "usage_error", 2),
         (["config", "set", "--proxy-port", "0"], "usage_error", 2),
         (["config", "set", "--proxy-port", "9090"], "invalid_ports", 2),
         (["config", "set", "--host", "bad-host"], "usage_error", 2),
+        (["config", "set", "--controller-host", "bad-host"], "usage_error", 2),
         (["config", "set", "--host", "256.1.1.1", "--dry-run"], "usage_error", 2),
         (["sub", "add", "../bad", "file.yaml"], "invalid_name", 2),
         (["sub", "add", "test", "file:///etc/passwd"], "invalid_source", 2),
@@ -142,7 +146,8 @@ dns: {enable: true, listen: '0.0.0.0:53', nameserver: [1.1.1.1]}
 """
     compiled = yaml.safe_load(
         render(source, {
-            "host": "127.0.0.1", "proxy_port": 12345, "controller_port": 12346, "mode": "rule"
+            "host": "127.0.0.1", "controller_host": "127.0.0.1",
+            "proxy_port": 12345, "controller_port": 12346, "mode": "rule"
         }, "secret")
     )
     assert compiled["mixed-port"] == 12345

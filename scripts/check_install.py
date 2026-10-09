@@ -7,6 +7,7 @@ No preinstalled core, subscription service, or external destination is used.
 import http.client
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -15,7 +16,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from mihomo_py.bundle import ASSET_ROOT
+from mihomo_py.bundle import ASSET_ROOT, dashboard_root
 
 
 class Origin(BaseHTTPRequestHandler):
@@ -84,6 +85,8 @@ def main():
                 cli(
                     "config",
                     "set",
+                    "--controller-host",
+                    "0.0.0.0",
                     "--proxy-port",
                     str(free_port()),
                     "--controller-port",
@@ -99,6 +102,34 @@ def main():
                             + (state / "core.log").read_text()
                         )
                     assert cli("core", "status")["healthy"]
+                    has_web = dashboard_root() is not None
+                    web = cli("core", "web") if has_web else {
+                        "port": started["settings"]["controller_port"],
+                        "secret": json.loads((state / "process.json").read_text())["secret"],
+                    }
+                    api = http.client.HTTPConnection("127.0.0.2", web["port"], timeout=5)
+                    try:
+                        api.request("GET", "/version")
+                        response = api.getresponse()
+                        assert response.status == 401
+                        response.read()
+                        headers = {} if has_web else {"Authorization": f"Bearer {web['secret']}"}
+                        api.request("GET", "/ui/", headers=headers)
+                        response = api.getresponse()
+                        assert response.status == (200 if has_web else 404)
+                        index = response.read().decode()
+                        assert web["secret"] not in index
+                        if has_web:
+                            assert "zashboard" in index
+                        else:
+                            assert not list(ASSET_ROOT.rglob("*zashboard*"))
+                        for asset in re.findall(r'(?:src|href)="(\./[^"?]+)"', index):
+                            api.request("GET", "/ui/" + asset[2:])
+                            response = api.getresponse()
+                            assert response.status == 200, asset
+                            response.read()
+                    finally:
+                        api.close()
                     connection = http.client.HTTPConnection(
                         "127.0.0.1",
                         started["settings"]["proxy_port"],
@@ -111,11 +142,16 @@ def main():
                         assert response.read() == b"offline-install-ok"
                     finally:
                         connection.close()
-                    assert "download" not in (state / "core.log").read_text().lower()
+                    log = (state / "core.log").read_text()
+                    if has_web:
+                        assert "UI already exists, skip downloading" in log
+                    assert "download" not in log.replace(
+                        "UI already exists, skip downloading", ""
+                    ).lower()
                 finally:
                     cli("core", "stop")
                 assert not cli("core", "status")["running"]
-                print(f"geodata-mode={mode}: validate/start/proxy/stop passed")
+                print(f"geodata-mode={mode}: validate/start/web/auth/proxy/stop passed")
         finally:
             server.shutdown()
             server.server_close()
