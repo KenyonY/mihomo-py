@@ -4,7 +4,10 @@ Screen { background: $background; color: $foreground; }
 #edition { width: auto; color: $text-muted; }
 #overview { height: 3; margin: 1 2 0 2; }
 .metric { width: 1fr; height: 2; padding-right: 2; }
+#kernel-metric { min-width: 16; }
 #subscription-metric { width: 2fr; }
+#proxy-metric { width: 23; }
+#mode-metric { width: 10; }
 .metric-label { height: 1; color: $text-muted; }
 .metric-value { height: 1; text-overflow: ellipsis; text-wrap: nowrap; }
 #status { color: $text-muted; }

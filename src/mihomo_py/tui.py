@@ -1,9 +1,12 @@
 """Interactive front end. All blocking backend work runs off the UI thread."""
 
 import asyncio
+import errno
+import os
+from itertools import chain
 
 from rich.text import Text
-from textual import on
+from textual import events, on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -36,6 +39,13 @@ class StableTable(DataTable):
 
     def on_resize(self):
         self.set_records(self.records)
+
+    async def _on_click(self, event: events.Click) -> None:
+        # Browsing a subscription must not apply it, even on repeated clicks.
+        if self.id == "subs":
+            event.prevent_default()  # Textual otherwise invokes the base handler again.
+            with self.prevent(DataTable.RowSelected):
+                await super()._on_click(event)
 
     def set_records(self, records):
         available = max(52, self.size.width - 10)  # cell padding + scrollbar
@@ -114,8 +124,7 @@ class Dialog(ModalScreen):
     ]
 
     def action_cancel(self):
-        if not self.app.busy:
-            self.dismiss()
+        self.dismiss()
 
     def action_error_details(self):
         self.app.action_error_details()
@@ -147,8 +156,29 @@ def error_message(error):
     return f"操作失败（{type(error).__name__}），请重试。"
 
 
+def error_details(error, operation):
+    """Describe safe error metadata, never raw exceptions or core diagnostics."""
+    lines = [f"操作：{operation}", f"异常：{type(error).__name__}"]
+    if isinstance(error, AppError):
+        lines.extend([f"错误代码：{error.kind}", error_message(error)])
+    else:
+        lines.append(error_message(error))
+        cause = error if isinstance(error, OSError) else error.__cause__
+        if isinstance(cause, OSError) and cause.errno is not None:
+            code = cause.errno
+            lines.extend([
+                f"系统错误：{errno.errorcode.get(code, 'UNKNOWN')}（errno={code}）",
+                f"系统原因：{os.strerror(code)}",
+            ])
+    return "\n".join(lines)
+
+
 class Form(Dialog):
     BINDINGS = [("escape", "cancel", "取消")]
+
+    def action_cancel(self):
+        if not self.app.busy:
+            self.dismiss()
 
     def __init__(self, title, fields, submit, *, choices=None):
         super().__init__()
@@ -204,7 +234,7 @@ class Form(Dialog):
         self.submit(values, self)
 
     def field_error(self, key, message):
-        self.app.show_error(AppError("invalid_field", message, 2))
+        self.app.show_error(AppError("invalid_field", message, 2), operation="检查表单")
         widget = self.query_one(f"#{key}")
         widget.add_class("invalid")
         widget.focus()
@@ -238,6 +268,7 @@ class MihomoApp(App):
     TITLE = "mihomo-py"
     SUB_TITLE = "服务器代理管理"
     ENABLE_COMMAND_PALETTE = False
+    READ_ONLY_BUTTONS = {"detail-close", "log-follow", "error-details"}
     BINDINGS = [
         Binding("q", "quit", "退出"),
         Binding("ctrl+q", "quit", "退出", show=False, priority=True),
@@ -284,6 +315,8 @@ class MihomoApp(App):
         self.node_names = []
         self.sub_names = []
         self.last_error = None
+        self.last_error_details = None
+        self.next_focus = None
         self.delay_results = {}
         self.testing_node = None
         self.delay_errors = {}
@@ -296,16 +329,16 @@ class MihomoApp(App):
             yield Static("mihomo  /  代理管理", id="brand")
             yield Static("本机 · mihomo-py", id="edition")
         with Horizontal(id="overview"):
-            with Vertical(classes="metric"):
+            with Vertical(id="kernel-metric", classes="metric"):
                 yield Static("内核", classes="metric-label")
                 yield Static("○  读取中", id="status", classes="metric-value", markup=False)
             with Vertical(id="subscription-metric", classes="metric"):
                 yield Static("订阅 · 已选 / 运行", classes="metric-label")
                 yield Static("—", id="subscription-value", classes="metric-value", markup=False)
-            with Vertical(classes="metric"):
+            with Vertical(id="proxy-metric", classes="metric"):
                 yield Static("本机代理", classes="metric-label")
                 yield Static("—", id="proxy-value", classes="metric-value")
-            with Vertical(classes="metric"):
+            with Vertical(id="mode-metric", classes="metric"):
                 yield Static("路由模式", classes="metric-label")
                 yield Static("—", id="mode-value", classes="metric-value")
         with Horizontal(id="controls", classes="buttons"):
@@ -392,12 +425,11 @@ class MihomoApp(App):
                 isinstance(widget, Input) or (isinstance(widget, Select) and widget.expanded)
                 for widget in self.focused.ancestors_with_self
             )
-            return not isinstance(self.screen, ModalScreen) and not editing and not self.busy
+            return not isinstance(self.screen, ModalScreen) and not editing
         if action == "clear_search":
             return (
                 not isinstance(self.screen, ModalScreen)
                 and self.focused is self.query_one("#filter")
-                and not self.busy
             )
         return True
 
@@ -455,6 +487,7 @@ class MihomoApp(App):
                     "q / Ctrl-Q    退出（保留内核）\n\n"
                     "输入框保留文本编辑快捷键；弹窗内不切换页面。\n"
                     "● 表示已选订阅 / 生效节点，高亮背景表示正在浏览的行。\n"
+                    "订阅单击只选择，Enter 或使用按钮执行；运行中切换会重启内核。\n"
                     "日志可能包含订阅内部地址。"
                 ),
             )
@@ -498,8 +531,8 @@ class MihomoApp(App):
     def action_error_details(self):
         if isinstance(self.screen, Details):
             return
-        if self.last_error and not self.busy:
-            self.show_dialog(Details("错误详情", self.last_error))
+        if self.last_error:
+            self.show_dialog(Details("错误详情", self.last_error_details))
 
     def pause_logs(self):
         self.log_following = False
@@ -590,7 +623,7 @@ class MihomoApp(App):
                 and not self.busy
                 and not isinstance(self.screen, ModalScreen)
             ):
-                self.show_error(error)
+                self.show_error(error, operation="刷新状态")
         finally:
             self.reading = False
             if revision != self.revision:
@@ -609,10 +642,11 @@ class MihomoApp(App):
         )
         settings = status["running_settings"] or status["settings"]
         status_widget = self.query_one("#status", Static)
-        status_widget.update(f"{'●' if status['running'] else '○'}  {state}")
+        display_state = "API 未就绪" if status["running"] and not status["healthy"] else state
+        status_widget.update(f"{'●' if status['running'] else '○'}  {display_state}")
         status_widget.set_class(status["healthy"], "online")
         status_widget.set_class(status["running"] and not status["healthy"], "pending")
-        status_widget.tooltip = f"PID {status['pid'] or '—'}"
+        status_widget.tooltip = f"{state} · PID {status['pid'] or '—'}"
         selected, running = status["selected"] or "—", status["running_subscription"] or "—"
         subscription = selected if selected == running else f"{selected} / {running}"
         self.query_one("#subscription-value", Static).update(subscription)
@@ -621,9 +655,6 @@ class MihomoApp(App):
         self.query_one("#proxy-value", Static).update(address)
         self.query_one("#proxy-value").tooltip = address
         self.query_one("#mode-value", Static).update(settings["mode"].upper())
-        self.query_one("#sub-hint", Static).update(
-            f"{len(snapshot['subs'])} 个订阅 · Enter 使用 · i 详情"
-        )
         self.query_one("#subs").display = bool(snapshot["subs"])
         self.query_one("#sub-empty").display = not snapshot["subs"]
         self.query_one("#subs", StableTable).set_records(
@@ -663,6 +694,21 @@ class MihomoApp(App):
         self.update_nodes()
         self.render_logs()
         self.update_buttons()
+        tabs = self.query_one(TabbedContent)
+        table = self.query_one("#subs", DataTable)
+        if self.next_focus:
+            selector, name = self.next_focus
+            self.next_focus = None
+            if selector == "#subs" and name in self.sub_names:
+                tabs.active = "subscriptions"
+                table.move_cursor(row=self.sub_names.index(name))
+                table.focus()
+            elif selector == "#start" and tabs.active == "subscriptions" and not status["running"]:
+                self.query_one("#start").focus()
+        elif previous is None and self.sub_names and tabs.active == "subscriptions":
+            if status["selected"] in self.sub_names:
+                table.move_cursor(row=self.sub_names.index(status["selected"]))
+            table.focus()
 
     def node_delay(self, node):
         name = node["name"]
@@ -736,6 +782,29 @@ class MihomoApp(App):
         if self.snapshot:
             status = self.snapshot["status"]
             running = status["running"]
+            name = self.current_sub()
+            use_restarts = bool(name) and running and name != status["running_subscription"]
+            update_restarts = bool(name) and running and name in (
+                status["selected"], status["running_subscription"]
+            )
+            use = self.query_one("#use", Button)
+            use.label = "使用并重启" if use_restarts else "使用"
+            use.tooltip = (
+                "应用此订阅，将重启内核并短暂中断连接。"
+                if use_restarts else "应用此订阅；内核停止时不会自动启动。"
+            )
+            update = self.query_one("#update", Button)
+            update.label = "更新并应用" if update_restarts else "更新"
+            warning = "配置有变化时将重启内核并短暂中断连接。"
+            update.tooltip = warning if update_restarts else "读取来源并校验、保存订阅。"
+            self.query_one("#edit", Button).tooltip = (
+                warning if update_restarts else "修改来源并重新读取、校验订阅。"
+            )
+            action = "Enter 使用并重启" if use_restarts else "Enter 使用"
+            warning_hint = " · 更新变更将重启" if update_restarts else ""
+            self.query_one("#sub-hint", Static).update(
+                f"{len(self.sub_names)} 个订阅 · 单击选择 · {action}{warning_hint} · i 详情"
+            )
             disabled.update(start=not status["selected"], stop=not running, restart=not running)
             for key in ("use", "update", "edit", "remove"):
                 disabled[key] = not self.current_sub()
@@ -746,7 +815,7 @@ class MihomoApp(App):
             selectable = self.snapshot["proxies"].get(self.group_name, {}).get("type") == "Selector"
             disabled["select-node"] = not self.node_names or not selectable
             disabled["test-node"] = not self.node_names
-        for button in self.query(Button):
+        for button in chain.from_iterable(screen.query(Button) for screen in self.screen_stack):
             unavailable = disabled.get(button.id, False)
             if button.id in ("error-details", "form-details"):
                 has_error = bool(self.last_error)
@@ -755,13 +824,20 @@ class MihomoApp(App):
                     has_error = has_error and bool(form.query_one("#form-error", Static).content)
                 button.display = has_error
                 unavailable = not has_error
-            button.disabled = self.busy or unavailable
-        for widget in self.query("Input, Select"):
-            widget.disabled = self.busy
+            button.disabled = unavailable or (
+                self.busy and button.id not in self.READ_ONLY_BUTTONS
+            )
+        for widget in chain.from_iterable(
+            screen.query("Input, Select") for screen in self.screen_stack
+        ):
+            widget.disabled = self.busy and any(
+                isinstance(parent, Form) for parent in widget.ancestors
+            )
 
-    def show_error(self, error):
+    def show_error(self, error, *, operation="界面操作"):
         message = error_message(error)
         self.last_error = message
+        self.last_error_details = error_details(error, operation)
         self.query_one("#message", Static).update(message)
         self.query_one("#message").set_classes("error")
         if isinstance(self.screen, Form):
@@ -780,18 +856,21 @@ class MihomoApp(App):
             self.screen.query_one("#form-error", Static).update(message)
             self.screen.query_one("#form-error").add_class("progress")
 
-    def operate(self, label, operation, form=None):
+    def operate(self, label, operation, form=None, *, focus=None, success=None):
         if self.busy:
             return
         self.busy = True
         self.revision += 1
         self.last_error = None
+        self.last_error_details = None
         self.query_one("#message").set_classes("progress")
         self.query_one("#message", Static).update(f"{label}…")
         self.update_buttons()
-        self.run_worker(self.run_operation(label, operation, form), group="operation")
+        self.run_worker(
+            self.run_operation(label, operation, form, focus, success), group="operation"
+        )
 
-    async def run_operation(self, label, operation, form):
+    async def run_operation(self, label, operation, form, focus, success):
         def execute():
             with self.manager.store.lock():
                 return operation()
@@ -802,26 +881,30 @@ class MihomoApp(App):
                 self.delay_results[result["name"]] = result["delay_ms"]
                 message = f"{result['name']}：{result['delay_ms']} ms"
             else:
-                message = f"{label}完成"
+                message = success or f"{label}完成"
+            self.next_focus = focus
             if form:
                 form.dismiss()
             self.query_one("#message", Static).update(message)
             self.query_one("#message").set_classes("success")
         except Exception as error:
             if self.testing_node:
-                self.delay_errors[self.testing_node] = error_message(error)
+                self.delay_errors[self.testing_node] = error_details(error, label)
                 self.delay_results.pop(self.testing_node, None)
-            self.show_error(error)
+            self.show_error(error, operation=label)
         finally:
             self.testing_node = None
             self.busy = False
-            self.update_nodes()
-            self.update_buttons()
-            # A refresh started before this operation must never overwrite its result.
-            self.action_refresh()
+            if self.is_running:
+                self.update_nodes()
+                self.update_buttons()
+                # A refresh started before this operation must never overwrite its result.
+                self.action_refresh()
 
     async def action_quit(self):
-        if self.busy:
+        if isinstance(self.screen, Details):
+            self.screen.dismiss()
+        elif self.busy:
             self.query_one("#message", Static).update("操作正在完成，请稍后退出。")
         elif isinstance(self.screen, ModalScreen):
             self.screen.dismiss()
@@ -847,6 +930,8 @@ class MihomoApp(App):
                         progress=self.subscription_progress,
                     ),
                     form,
+                    focus=("#subs", values["sub-name"]),
+                    success="已添加订阅，按 Enter 使用。",
                 ),
             )
         )
@@ -873,7 +958,12 @@ class MihomoApp(App):
     def use_sub(self):
         name = self.current_sub()
         if name and not self.query_one("#use", Button).disabled:
-            self.operate("切换订阅", lambda: self.manager.use(name))
+            stopped = not self.snapshot["status"]["running"]
+            self.operate(
+                "切换订阅", lambda: self.manager.use(name),
+                focus=("#start", None) if stopped else None,
+                success="订阅已使用，按 Enter 启动内核。" if stopped else None,
+            )
 
     def select_node(self):
         name, group = self.current_node(), self.group_name
@@ -885,7 +975,9 @@ class MihomoApp(App):
 
     @on(Button.Pressed)
     def pressed(self, event):
-        if self.busy or event.button.disabled:
+        if event.button.disabled or (
+            self.busy and event.button.id not in self.READ_ONLY_BUTTONS
+        ):
             return
         name = self.current_sub()
         button = event.button.id
@@ -928,7 +1020,10 @@ class MihomoApp(App):
                     "本机设置（运行中应用会重启内核）",
                     [
                         ("proxy-port", "代理端口", str(settings["proxy_port"]), False),
-                        ("controller-port", "管理端口", str(settings["controller_port"]), False),
+                        (
+                            "controller-port", "管理 / Web 端口",
+                            str(settings["controller_port"]), False,
+                        ),
                         ("mode", "模式：rule / global / direct", settings["mode"], False),
                         (
                             "host", "代理监听 IPv4 地址（0.0.0.0 为所有接口）",
@@ -965,9 +1060,13 @@ class MihomoApp(App):
                 return
             if name not in state["subs"]:
                 raise AppError("not_found", "订阅已移除，请刷新后重试。", 3)
+            status = self.snapshot["status"]
+            restarting = status["running"] and name in (
+                status["selected"], status["running_subscription"]
+            )
             self.show_dialog(
                 Form(
-                    f"修改来源：{name}",
+                    f"修改来源：{name}" + ("（配置变更将重启内核）" if restarting else ""),
                     [
                         (
                             "sub-source",
@@ -989,7 +1088,8 @@ class MihomoApp(App):
             )
         except Exception as error:
             if self.is_running:
-                self.show_error(error)
+                self.show_error(error, operation="读取订阅来源")
+
 
     @on(DataTable.RowHighlighted)
     def row_highlighted(self):

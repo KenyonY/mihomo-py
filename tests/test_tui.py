@@ -1,4 +1,6 @@
 import asyncio
+import errno
+import os
 import threading
 
 import pytest
@@ -53,11 +55,10 @@ async def test_real_ui_subscription_lifecycle(real_core, source):
         await pilot.click("#form-submit")
         await settled(app, pilot)
         assert not isinstance(app.screen, Form)
-        assert app.focused.id == "add"
-        # Trigger one refresh if modal dismissal deferred the automatic snapshot.
-        app.action_refresh()
-        await settled(app, pilot)
+        assert app.focused.id == "subs"
         assert app.sub_names == ["work"]
+        assert real_core.status()["selected"] is None
+        assert not real_core.status()["running"]
         assert app.query_one("#subs").display
         assert not app.query_one("#sub-empty").display
         await pilot.click("#edit")
@@ -68,7 +69,10 @@ async def test_real_ui_subscription_lifecycle(real_core, source):
         await pilot.press("enter")
         await settled(app, pilot)
         assert real_core.store.read()["selected"] == "work"
-        await pilot.click("#start")
+        assert app.focused.id == "start"
+        assert "Enter 启动" in str(app.query_one("#message", Static).content)
+        assert not real_core.status()["running"]
+        await pilot.press("enter")
         await settled(app, pilot)
         assert app.snapshot["status"]["healthy"]
         running_pid = real_core.status()["pid"]
@@ -78,6 +82,7 @@ async def test_real_ui_subscription_lifecycle(real_core, source):
     app = MihomoApp(real_core)
     async with app.run_test(size=(80, 24)) as pilot:
         await settled(app, pilot)
+        assert app.focused.id == "subs"
         await pilot.click("#stop")
         await settled(app, pilot)
         assert not real_core.status()["running"]
@@ -89,6 +94,69 @@ async def test_real_ui_subscription_lifecycle(real_core, source):
         await pilot.click("#form-submit")
         await settled(app, pilot)
         assert not real_core.store.read()["subs"]
+
+
+@pytest.mark.integration
+async def test_addition_focuses_new_subscription_without_applying(real_core, source):
+    real_core.put_sub("existing", str(source), create=True)
+    real_core.use("existing")
+    app = MihomoApp(real_core)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        assert app.focused.id == "subs"
+        assert app.current_sub() == "existing"
+        await pilot.press("ctrl+a", *"new", "tab", *str(source), "enter")
+        await settled(app, pilot)
+        assert app.focused.id == "subs"
+        assert app.current_sub() == "new"
+        assert real_core.status()["selected"] == "existing"
+        assert not real_core.status()["running"]
+        await pilot.press("enter")
+        await settled(app, pilot)
+        assert real_core.status()["selected"] == "new"
+        assert app.focused.id == "start"
+        assert not real_core.status()["running"]
+
+
+@pytest.mark.integration
+async def test_subscription_click_browses_and_enter_applies(real_core, source):
+    real_core.put_sub("work", str(source), create=True)
+    real_core.put_sub("backup", str(source), create=True)
+    real_core.use("work")
+    real_core.start()
+    pid = real_core.status()["pid"]
+    app = MihomoApp(real_core)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        table = app.query_one("#subs", DataTable)
+        table.move_cursor(row=1, column=1)
+        await pilot.pause()
+        for _ in range(2):
+            await pilot.click("#subs", offset=(8, 2))
+            await settled(app, pilot)
+        assert app.current_sub() == "backup"
+        assert real_core.status()["selected"] == "work"
+        assert real_core.status()["pid"] == pid
+        assert str(app.query_one("#use", Button).label) == "使用并重启"
+        assert "重启" in str(app.query_one("#sub-hint", Static).content)
+        assert "中断连接" in app.query_one("#use").tooltip
+        await pilot.press("enter")
+        await settled(app, pilot)
+        assert real_core.status()["selected"] == "backup"
+        assert real_core.status()["running_subscription"] == "backup"
+        assert real_core.status()["pid"] != pid
+        assert str(app.query_one("#use", Button).label) == "使用"
+        assert str(app.query_one("#update", Button).label) == "更新并应用"
+        await pilot.click("#edit")
+        await settled(app, pilot)
+        assert "配置变更将重启" in app.screen.heading
+        await pilot.press("escape")
+        pid = real_core.status()["pid"]
+        source.write_text(source.read_text() + "log-level: debug\n")
+        await pilot.click("#update")
+        await settled(app, pilot)
+        assert real_core.status()["pid"] != pid
+        assert real_core.status()["healthy"]
 
 
 async def test_form_errors_preserve_inputs(tmp_path):
@@ -106,6 +174,46 @@ async def test_form_errors_preserve_inputs(tmp_path):
         assert not app.busy
         assert not app.screen.query_one("#sub-source", Input).disabled
         await pilot.press("escape")
+
+
+@pytest.mark.parametrize("kind", ["permission", "wrapped", "validation"])
+async def test_error_details_include_safe_context_without_credentials(tmp_path, kind):
+    app = MihomoApp(Manager(tmp_path / "home"))
+    secret = "PRIVATE-TOKEN-DO-NOT-DISPLAY"
+
+    def fail():
+        if kind == "permission":
+            raise PermissionError(errno.EACCES, f"https://example.com/{secret}", secret)
+        if kind == "wrapped":
+            try:
+                raise OSError(errno.ENOSPC, secret)
+            except OSError as error:
+                raise RuntimeError(secret) from error
+        raise AppError(
+            "validation_failed", "mihomo 拒绝此配置，原配置未替换。",
+            suggestion=f"查看本地诊断文件：{tmp_path / 'validation.log'}",
+        )
+
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        app.operate("保存设置", fail)
+        await settled(app, pilot)
+        await pilot.press("f8")
+        assert isinstance(app.screen, Details)
+        content = app.screen.content
+        assert "操作：保存设置" in content
+        assert secret not in content
+        assert content != app.last_error
+        if kind == "validation":
+            assert "validation_failed" in content
+            assert str(tmp_path / "validation.log") in content
+        else:
+            code = errno.EACCES if kind == "permission" else errno.ENOSPC
+            assert errno.errorcode[code] in content
+            assert os.strerror(code) in content
+        assert app.screen.query_one("#detail-close").region.bottom <= 23
+        await pilot.press("escape")
+        assert app.last_error_details == content
 
 
 @pytest.mark.integration
@@ -254,6 +362,11 @@ async def test_subscription_progress_visible_while_validation_runs(tmp_path, mon
             assert app.busy
             assert "订阅已读取" in str(app.screen.query_one("#form-error", Static).content)
             assert app.screen.query_one("#form-submit").region.bottom <= 24
+            assert app.screen.query_one("#sub-source", Input).disabled
+            assert app.screen.query_one("#form-cancel", Button).disabled
+            await pilot.press("escape", "ctrl+q")
+            assert isinstance(app.screen, Form)
+            assert app.is_running and app.busy
         finally:
             gate.set()
         await settled(app, pilot)
@@ -282,12 +395,81 @@ def populated_snapshot(app, monkeypatch):
     return snapshot
 
 
+@pytest.mark.parametrize("label", ["测试延迟", "更新订阅"])
+async def test_busy_operation_allows_browsing_and_read_only_dialogs(tmp_path, monkeypatch, label):
+    app = MihomoApp(Manager(tmp_path / "home"))
+    snapshot = populated_snapshot(app, monkeypatch)
+    snapshot["proxies"]["备用组"] = {"type": "Selector", "all": ["DIRECT"], "now": "DIRECT"}
+    snapshot["proxies"]["DIRECT"] = {"type": "Direct", "history": []}
+    gate = threading.Event()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        app.operate(label, lambda: gate.wait(20))
+        try:
+            await pilot.pause()
+            assert app.busy
+            await pilot.press("2", "slash", "p", "r", "o")
+            assert app.query_one("#filter", Input).value == "pro"
+            assert app.node_names
+            await pilot.press("escape")
+            group = app.query_one("#group", Select)
+            assert not group.disabled
+            group.focus()
+            await pilot.press("enter", "end", "enter")
+            assert app.group_name == "备用组"
+            assert app.node_names == ["DIRECT"]
+            app.query_one("#node-table").focus()
+            assert app.query_one("#select-node", Button).disabled
+            await pilot.press("enter")
+            assert app.busy
+            await pilot.press("i")
+            assert isinstance(app.screen, Details)
+            assert "DIRECT" in app.screen.content
+            await pilot.press("escape", "question_mark")
+            assert isinstance(app.screen, Details)
+            await pilot.click("#detail-close")
+            assert not isinstance(app.screen, Details)
+            await pilot.press("question_mark", "ctrl+q")
+            assert not isinstance(app.screen, Details)
+            assert app.busy and app.is_running
+            await pilot.press("3")
+            assert app.query_one(TabbedContent).active == "logs"
+            await pilot.click("#log-follow")
+            assert not app.log_following
+            await pilot.click("#--content-tab-subscriptions")
+            assert app.query_one(TabbedContent).active == "subscriptions"
+            for selector in ("#use", "#update", "#add", "#stop", "#settings"):
+                assert app.query_one(selector, Button).disabled
+            await pilot.press("ctrl+a")
+            assert not isinstance(app.screen, Form)
+            await pilot.press("question_mark")
+            assert isinstance(app.screen, Details)
+        finally:
+            gate.set()
+        await settled(app, pilot)
+        assert not app.busy
+        assert isinstance(app.screen, Details)
+        await pilot.press("escape")
+        assert not app.query_one("#use", Button).disabled
+
+
 @pytest.mark.parametrize("size", [(80, 24), (100, 32), (120, 40)])
 async def test_layout_resize_long_names_and_details(tmp_path, monkeypatch, size):
     app = MihomoApp(Manager(tmp_path / "home"))
-    populated_snapshot(app, monkeypatch)
+    snapshot = populated_snapshot(app, monkeypatch)
+    address = "255.255.255.255:65535"
+    snapshot["status"]["settings"].update(host="255.255.255.255", proxy_port=65535)
     async with app.run_test(size=size) as pilot:
         await settled(app, pilot)
+        proxy = app.query_one("#proxy-value", Static)
+        assert address in "".join(strip.text for strip in proxy.render_lines(proxy.size.region))
+        snapshot["status"]["healthy"] = False
+        app.apply_snapshot(snapshot)
+        await pilot.pause()
+        kernel = app.query_one("#status", Static)
+        assert "API 未就绪" in "".join(
+            strip.text for strip in kernel.render_lines(kernel.size.region)
+        )
         await pilot.press("2")
         table = app.query_one("#node-table", DataTable)
         assert table.region.height - table.header_height >= 6
@@ -303,6 +485,7 @@ async def test_layout_resize_long_names_and_details(tmp_path, monkeypatch, size)
         selected = app.current_node()
         await pilot.resize_terminal(80, 24)
         await pilot.pause()
+        assert address in "".join(strip.text for strip in proxy.render_lines(proxy.size.region))
         assert app.current_node() == selected
         assert table.region.height - table.header_height >= 6
         assert not table.show_horizontal_scrollbar
@@ -481,7 +664,7 @@ async def test_automatic_group_enter_and_delay_failure_retry(tmp_path, monkeypat
         try:
             assert await asyncio.to_thread(entered.wait, 2)
             assert "测试中" in str(table.get_cell(name, "3"))
-            assert app.query_one("#group", Select).disabled
+            assert not app.query_one("#group", Select).disabled
         finally:
             gate.set()
         await settled(app, pilot)
