@@ -14,11 +14,11 @@ Subscriptions, nodes and logs — without leaving SSH.
 
 </div>
 
-![TUI: subscriptions, core controls and server status](docs/assets/tui-subscriptions.png)
+![TUI: subscriptions, core controls and server status](docs/assets/tui-subscriptions.en.png)
 
 A [mihomo](https://github.com/MetaCubeX/mihomo) client for Linux servers. Add a subscription, start the core, and manage it with your mouse or keyboard. The core and default GEO databases ship with the package.
 
-The screenshots below use the Chinese locale; the same screens are available in English from the language button.
+The TUI screenshots show v0.1.5 in English at 100 × 32. Use the language button to switch between English and Chinese.
 
 ## Install. Open. Done.
 
@@ -30,20 +30,20 @@ mihomo-py
 Requires **Python 3.11+**, **Linux kernel 5.3+** with pidfd support, and **x86_64 / aarch64**. Works with system Python and Conda. Recommended terminal size: **80 × 24** or larger. The TUI follows the system language on first launch and supports Chinese and English; use the language button to switch between Follow system, Chinese, and English.
 
 1. Click **Add**, or press `Ctrl+A`. Enter a name and a subscription URL or local YAML path.
-2. Select the subscription and press `Enter` to use it.
+2. Single-click to browse a subscription; double-click or press `Enter` to use it.
 3. Click **Start**. Your HTTP/SOCKS proxy is ready at `127.0.0.1:7897` by default.
 
 Subscriptions must be complete Clash/mihomo YAML configurations. Base64 node lists and individual proxy links are not supported.
 
 ## Find a node. Switch. Test.
 
-![TUI: proxy groups, node selection and latency testing](docs/assets/tui-nodes.png)
+![TUI: proxy groups, node selection and latency testing](docs/assets/tui-nodes.en.png)
 
 Press `2` for nodes, select a proxy group, and press `/` to search. In a manual group, `Enter` switches the selected node immediately; **Test latency** measures one node. Node choices survive core restarts.
 
 ## Follow logs. Keep your place.
 
-![TUI: live logs with pause and resume controls](docs/assets/tui-logs.png)
+![TUI: live logs with pause and resume controls](docs/assets/tui-logs.en.png)
 
 Press `3` for logs. Scroll up to pause; press `End` to resume following. Press `q` to leave the TUI — **the core keeps running**.
 
@@ -61,4 +61,4 @@ Install the optional Web resources with `python -m pip install 'mihomo-py[web]'`
 
 The proxy listens on `127.0.0.1:7897` by default. The authenticated management API listens on `0.0.0.0:9090`; the optional Web gateway listens on `0.0.0.0:9091`. Use a trusted network or change the bind address in **Settings**. TUN and automatic system proxy setup are outside the current scope.
 
-*Screenshots use an isolated local demo: direct routes, a local latency target, and no real subscription credentials. Bundled resources retain their [upstream notices](src/mihomo_py/_vendor/NOTICE.txt).*
+*TUI screenshots render the current application with fixed demo data (including sample logs and latency), without real subscription credentials. The Web screenshot uses an isolated local instance. Bundled resources retain their [upstream notices](src/mihomo_py/_vendor/NOTICE.txt).*
