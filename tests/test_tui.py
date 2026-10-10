@@ -54,6 +54,9 @@ async def test_english_translates_structured_backend_errors():
     assert translated_message("en", error.suggestion) == (
         "Refresh and try again; if the latency test fails, try another target or node."
     )
+    assert translated_message("en", "Web 服务正在开启或关闭，请稍后重试。") == (
+        "The Web service is starting or stopping. Try again shortly."
+    )
 
 
 async def test_language_can_be_changed_from_header_and_persisted(tmp_path, monkeypatch):

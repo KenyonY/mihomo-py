@@ -361,6 +361,7 @@ BACKEND_MESSAGES = {
     "Web 服务未能启动，请检查 web.log。": "The Web service failed to start. Check web.log.",
     "运行 mihomo-py web serve 可查看前台错误。": "Run mihomo-py web serve to see foreground errors.",
     "Web 服务尚未退出，请检查进程状态。": "The Web service has not exited. Check the process status.",
+    "Web 服务正在开启或关闭，请稍后重试。": "The Web service is starting or stopping. Try again shortly.",
     "此实例已有 Web 管理服务运行。": "A Web management service is already running for this instance.",
     "登录密钥已修改，请重新登录。": "The login key changed. Sign in again.",
     "需要 JSON 对象。": "A JSON object is required.",
