@@ -75,6 +75,48 @@ async def test_language_can_be_changed_from_header_and_persisted(tmp_path, monke
         assert app.language == "zh"
         assert "代理管理" in str(app.query_one("#brand", Static).content)
         assert manager.store.read()["language"] == "zh"
+    # An explicit preference wins over a different system locale on the next launch.
+    assert MihomoApp(manager).language == "zh"
+
+
+async def test_language_cancel_auto_and_failed_save(tmp_path, monkeypatch):
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    manager = Manager(tmp_path / "home")
+    app = MihomoApp(manager)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        for button in app.query("#controls Button, #masthead Button"):
+            assert button.region.right <= 80
+        await pilot.click("#language")
+        app.screen.query_one("#language", Select).value = "zh"
+        await pilot.press("escape")
+        assert app.language == "en"
+        assert not manager.store.root.exists()
+
+        def denied_save(_):
+            raise PermissionError(errno.EACCES, "private diagnostic")
+
+        with monkeypatch.context() as failed:
+            failed.setattr(manager.store, "save", denied_save)
+            app.action_language()
+            await pilot.pause()
+            app.screen.query_one("#language", Select).value = "zh"
+            await pilot.click("#form-submit")
+            await settled(app, pilot)
+            assert isinstance(app.screen, Form)
+            assert app.language == "en"
+            assert manager.store.read()["language"] == "auto"
+            assert "private diagnostic" not in app.last_error
+        await pilot.press("escape")
+        app.action_language()
+        await pilot.pause()
+        # "Follow system" resolves again and is kept as a preference.
+        monkeypatch.setenv("LC_ALL", "zh_CN.UTF-8")
+        app.screen.query_one("#language", Select).value = "auto"
+        await pilot.click("#form-submit")
+        await settled(app, pilot)
+        assert app.language == "zh"
+        assert manager.store.read()["language"] == "auto"
 
 
 async def test_empty_ui_keyboard_and_modal_cancel(tmp_path):
@@ -855,6 +897,11 @@ async def test_log_pause_freezes_window_and_end_resumes(tmp_path, monkeypatch):
         assert str(app.query_one("#log-text", Static).content) == snapshot["logs"]
         assert scroll.scroll_y == old_y
         assert "有更新" in str(app.query_one("#log-hint", Static).content)
+        app.apply_snapshot({**changed, "logs": ""})
+        await pilot.pause()
+        assert str(app.query_one("#log-text", Static).content) == snapshot["logs"]
+        assert scroll.scroll_y == old_y
+        app.apply_snapshot(changed)
         await pilot.press("end")
         assert app.log_following
         assert str(app.query_one("#log-text", Static).content) == changed["logs"]

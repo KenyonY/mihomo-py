@@ -388,6 +388,7 @@ class MihomoApp(App):
         self.testing_node = None
         self.delay_errors = {}
         self.log_following = True
+        self.rendered_logs = ""
         self.updating_logs = False
         self.page_focus = {}
 
@@ -683,13 +684,12 @@ class MihomoApp(App):
         widget = self.query_one("#log-text", Static)
         displayed = self.snapshot["logs"] or self.t("no_logs") if self.snapshot else ""
         changed = self.snapshot and str(widget.content) != displayed
-        should_render = self.snapshot and (
-            self.log_following and (changed or force)
-            or not self.snapshot["logs"] and changed
-        )
+        should_render = self.snapshot and self.log_following and (changed or force)
         if should_render:
             self.updating_logs = True
-            widget.update(displayed)
+            if changed:
+                widget.update(displayed)
+            self.rendered_logs = self.snapshot["logs"]
 
             def follow():
                 if self.log_following:
@@ -1141,6 +1141,8 @@ class MihomoApp(App):
         self.sub_title = self.t("app_subtitle")
         self.refresh_language_labels()
         self.update_binding_labels()
+        if not self.rendered_logs:
+            self.query_one("#log-text", Static).update(self.t("no_logs"))
         if self.last_error_exception:
             self.show_error(self.last_error_exception, operation=self.t("form_operation"))
         if self.snapshot:
