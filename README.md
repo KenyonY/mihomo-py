@@ -18,6 +18,8 @@ Subscriptions, nodes and logs — without leaving SSH.
 
 A [mihomo](https://github.com/MetaCubeX/mihomo) client for Linux servers. Add a subscription, start the core, and manage it with your mouse or keyboard. The core and default GEO databases ship with the package.
 
+The screenshots below use the Chinese locale; the same screens are available in English from the language button.
+
 ## Install. Open. Done.
 
 ```bash
@@ -25,11 +27,11 @@ python -m pip install mihomo-py
 mihomo-py
 ```
 
-Requires **Python 3.11+**, **Linux kernel 5.3+** with pidfd support, and **x86_64 / aarch64**. Works with system Python and Conda. Recommended terminal size: **80 × 24** or larger. The TUI follows the system language on first launch and supports Chinese and English.
+Requires **Python 3.11+**, **Linux kernel 5.3+** with pidfd support, and **x86_64 / aarch64**. Works with system Python and Conda. Recommended terminal size: **80 × 24** or larger. The TUI follows the system language on first launch and supports Chinese and English; use the language button to switch between Follow system, Chinese, and English.
 
-1. Click **添加** (Add), or press `Ctrl+A`. Enter a name and a subscription URL or local YAML path.
+1. Click **Add**, or press `Ctrl+A`. Enter a name and a subscription URL or local YAML path.
 2. Select the subscription and press `Enter` to use it.
-3. Click **启动** (Start). Your HTTP/SOCKS proxy is ready at `127.0.0.1:7897` by default.
+3. Click **Start**. Your HTTP/SOCKS proxy is ready at `127.0.0.1:7897` by default.
 
 Subscriptions must be complete Clash/mihomo YAML configurations. Base64 node lists and individual proxy links are not supported.
 
@@ -37,7 +39,7 @@ Subscriptions must be complete Clash/mihomo YAML configurations. Base64 node lis
 
 ![TUI: proxy groups, node selection and latency testing](docs/assets/tui-nodes.png)
 
-Press `2` for nodes, select a proxy group, and press `/` to search. In a manual group, `Enter` switches the selected node immediately; **测试延迟** (Test latency) measures one node. Node choices survive core restarts.
+Press `2` for nodes, select a proxy group, and press `/` to search. In a manual group, `Enter` switches the selected node immediately; **Test latency** measures one node. Node choices survive core restarts.
 
 ## Follow logs. Keep your place.
 
@@ -51,12 +53,12 @@ Press `3` for logs. Scroll up to pause; press `End` to resume following. Press `
 
 ![Web: subscription management using the same configuration as the TUI](docs/assets/web-subscriptions.png)
 
-Install the optional Web resources with `python -m pip install 'mihomo-py[web]'`, then click **开启 Web** (Enable Web) in the TUI. The gateway stays running after the TUI exits; click **Web 面板** (Web dashboard) for the address and login key. A separate Web gateway also manages subscriptions. [Setup →](docs/cli.en.md#web-access)
+Install the optional Web resources with `python -m pip install 'mihomo-py[web]'`, then click **Enable Web** in the TUI. The gateway runs as a separate service on port `9091` by default, uses the configured management bind address, and stays running after the TUI exits. Click **Web** for the address and login key; **Settings** can rotate the shared login key. The same gateway manages subscriptions and embeds the node dashboard. [Setup →](docs/cli.en.md#web-access)
 
 ## Go further
 
 [CLI & scripting](docs/cli.en.md) · [TUI guide](docs/tui.en.md) · [Documentation](docs/README.md) · [Offline installation](docs/packaging.md)
 
-The proxy listens on `127.0.0.1` by default. The authenticated management API listens on `0.0.0.0:9090`; use a trusted network or change its bind address in **设置** (Settings). TUN and automatic system proxy setup are outside the current scope.
+The proxy listens on `127.0.0.1:7897` by default. The authenticated management API listens on `0.0.0.0:9090`; the optional Web gateway listens on `0.0.0.0:9091`. Use a trusted network or change the bind address in **Settings**. TUN and automatic system proxy setup are outside the current scope.
 
 *Screenshots use an isolated local demo: direct routes, a local latency target, and no real subscription credentials. Bundled resources retain their [upstream notices](src/mihomo_py/_vendor/NOTICE.txt).*

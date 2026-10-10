@@ -25,7 +25,7 @@ python -m pip install mihomo-py
 mihomo-py
 ```
 
-需要 **Python 3.11+**、支持 pidfd 的 **Linux 5.3+** 内核，支持 **x86_64 / aarch64**、系统 Python 和 Conda。建议终端至少 **80 × 24**；TUI 首次按系统语言选择中文或英文。
+需要 **Python 3.11+**、支持 pidfd 的 **Linux 5.3+** 内核，支持 **x86_64 / aarch64**、系统 Python 和 Conda。建议终端至少 **80 × 24**；TUI 首次按系统语言选择中文或英文，也可以在语言按钮中切换跟随系统、中文和 English。
 
 1. 点击 **添加**，或按 `Ctrl+A`，填写名称和订阅 URL / 本地 YAML 路径。
 2. 选中订阅，按 `Enter` 使用。
@@ -51,12 +51,12 @@ mihomo-py
 
 ![Web：与 TUI 共用配置的订阅管理](docs/assets/web-subscriptions.png)
 
-执行 `python -m pip install 'mihomo-py[web]'`，进入 TUI 后点击 **开启 Web**；服务会在后台持续运行，点击 **Web 面板** 获取地址和登录密钥。独立 Web 入口可管理订阅。[配置方法 →](docs/subscriptions-web.md)
+执行 `python -m pip install 'mihomo-py[web]'`，进入 TUI 后点击 **开启 Web**。服务默认使用 `9091` 端口和设置中的管理监听地址，退出 TUI 后仍在后台运行；点击 **Web 面板** 获取地址和登录密钥，**设置**中可以修改共享登录密钥。这个独立 Web 入口同时提供订阅管理和节点面板。[配置方法 →](docs/subscriptions-web.md)
 
 ## 更多用法
 
 [命令行与脚本](docs/cli.md) · [TUI 指南](docs/tui.md) · [文档导航](docs/README.md) · [离线安装](docs/packaging.md)
 
-代理默认监听 `127.0.0.1`；带密钥验证的管理 API 默认监听 `0.0.0.0:9090`，请在可信网络使用，或在 **设置** 中修改监听地址。当前不提供 TUN 和系统代理自动配置。
+代理默认监听 `127.0.0.1:7897`；带密钥验证的管理 API 默认监听 `0.0.0.0:9090`，可选 Web 服务默认监听 `0.0.0.0:9091`。请在可信网络使用，或在 **设置** 中修改监听地址。当前不提供 TUN 和系统代理自动配置。
 
 *截图使用隔离的本地演示配置：直连节点、本地测速目标，不含真实订阅凭证。内置资源保留各自的[上游许可与归属说明](src/mihomo_py/_vendor/NOTICE.txt)。*
