@@ -53,7 +53,7 @@ MIHOMO_BUILD_ARCH=aarch64 python -m build --wheel --installer uv
 
 本地构建不代表已发布；只有上传发行包并等待镜像同步后，用户才能直接从镜像执行 `pip install mihomo-py`。
 
-GitHub 的 `.github/workflows/python-publish.yml` 在推送 `v*` tag 时构建两个架构的 wheel 和源码包，检查发行包元数据，先发布 `web/` 中的 `mihomo-py-web`，再发布主包到 PyPI。发布凭据保存在仓库的 `PYPI_API_TOKEN` Actions secret 中。版本号在 `pyproject.toml`、`src/mihomo_py/__init__.py`、`web/pyproject.toml` 和 `web/src/mihomo_py_web/__init__.py` 中保持一致，tag 使用对应的 `v<版本号>`。
+GitHub 的 `.github/workflows/python-publish.yml` 在推送 `v*` tag 时构建两个架构的 wheel 和源码包，检查发行包元数据，先发布 `web/` 中的 `mihomo-py-web`，再发布主包到 PyPI。发布凭据保存在仓库的 `PYPI_API_TOKEN` Actions secret 中。版本号在 `pyproject.toml`、`src/mihomo_py/__init__.py`、`web/pyproject.toml` 和 `web/src/mihomo_py_web/__init__.py` 中保持一致；使用 `make bump VERSION=0.1.6` 同步这四处（省略 `VERSION` 时自动递增补丁号），再创建对应的 `v<版本号>` tag。
 
 ## Docker 多架构验证
 
