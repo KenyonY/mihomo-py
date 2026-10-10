@@ -2,9 +2,13 @@
 
 [English](tui.en.md) · [简体中文](tui.md) · [Project home](../README.md)
 
-Run `mihomo-py` in an interactive terminal, or use `mihomo-py tui` explicitly. A terminal of at least **80 × 24** is recommended. Mouse and Tab / Shift-Tab navigation are supported, including over SSH. The UI currently uses Chinese labels; this guide includes their English meanings.
+Run `mihomo-py` in an interactive terminal, or use `mihomo-py tui` explicitly. A terminal of at least **80 × 24** is recommended. Mouse and Tab / Shift-Tab navigation are supported, including over SSH.
 
 Opening the TUI does not start the core. Exiting leaves a running core in the background. Data refreshes every two seconds; downloads and core operations run in background threads. Wait for an active operation to finish before exiting.
+
+## Language
+
+On first launch, the TUI follows the system language for Chinese or English; an unknown locale falls back to Chinese. Use the **Language** button in the header to choose **Follow system**, **中文**, or **English**. The choice is stored in `state.json` under the current data directory and is used the next time the TUI opens. The follow-system option does not change the system locale.
 
 ## Subscriptions: add → use → start
 

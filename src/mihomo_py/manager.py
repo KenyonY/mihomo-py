@@ -1,13 +1,24 @@
 import copy
+import fcntl
 import json
+import os
+import select
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import yaml
 
+from . import pidfd
 from .bundle import dashboard_root
 from .config import check_name, fetch, normalize_source, parse, source_label
 from .engine import Engine, fingerprint, process_identity
-from .errors import AppError
+from .errors import AppError, Message
 from .store import Store, atomic_write, controller_address, valid_host
 
 
@@ -64,6 +75,149 @@ class Manager:
         if identity and identity == record["identity"]:
             return record
         return None
+
+    @contextmanager
+    def web_control(self):
+        # The child needs the state lock to register; use a separate lock for
+        # parent lifecycle operations and release it before returning to the UI.
+        self.store.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(self.store.root / ".web-control.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise AppError("busy", "Web 服务正在开启或关闭，请稍后重试。", 5) from exc
+            yield
+        finally:
+            os.close(fd)
+
+    def start_web(self, *, host=None, port=9091):
+        with self.web_control():
+            return self._start_web(host=host, port=port)
+
+    def _start_web(self, *, host=None, port=9091):
+        """Start the subscription gateway as a detached child process."""
+        if dashboard_root() is None:
+            raise AppError(
+                "web_missing", "尚未安装 Web 资源。", 3, "pip install 'mihomo-py[web]'。"
+            )
+        settings = self.store.read()["settings"]
+        host = host or settings["controller_host"]
+        if port in (settings["controller_port"], settings["proxy_port"]):
+            raise AppError("invalid_ports", "Web 服务端口须与管理 API、代理端口不同。", 2)
+        if self.web_gateway():
+            return self.web()
+        self.store.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        command = [
+            sys.executable,
+            "-m",
+            "mihomo_py",
+            "--data-dir",
+            str(self.store.root),
+            "--timeout",
+            str(self.engine.timeout),
+            "web",
+            "serve",
+            "--host",
+            host,
+            "--port",
+            str(port),
+        ]
+        if self.engine.binary:
+            command[5:5] = ["--core-binary", self.engine.binary]
+        log_path = self.store.root / "web.log"
+        log_path.touch(mode=0o600, exist_ok=True)
+        log_path.chmod(0o600)
+        log = log_path.open("ab")
+        try:
+            child = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                start_new_session=True,
+                close_fds=True,
+            )
+        finally:
+            log.close()
+        deadline = time.monotonic() + 5
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        while time.monotonic() < deadline:
+            info = self.web_gateway()
+            if info:
+                address = controller_address({"controller_host": info["host"]})
+                request = urllib.request.Request(
+                    f"http://{address}:{info['port']}/mihomo-py/api/subscriptions",
+                    headers={"Authorization": "Bearer " + self.engine.controller_secret()},
+                )
+                try:
+                    with opener.open(request, timeout=0.5) as response:
+                        if response.status == 200:
+                            return self.web()
+                except (OSError, urllib.error.URLError):
+                    pass
+            if child.poll() is not None:
+                break
+            time.sleep(0.05)
+        if child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+        raise AppError(
+            "web_start_failed",
+            "Web 服务未能启动，请检查 web.log。",
+            5,
+            "运行 mihomo-py web serve 可查看前台错误。",
+        )
+
+    def stop_web(self):
+        with self.web_control():
+            return self._stop_web()
+
+    def _stop_web(self):
+        """Stop only the detached subscription gateway owned by this instance."""
+        path = self.store.root / "web-service.json"
+        try:
+            record = json.loads(path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return False
+        identity = process_identity(record.get("pid"))
+        expected = record.get("identity")
+        if not identity or identity != expected:
+            path.unlink(missing_ok=True)
+            return False
+        try:
+            fd = pidfd.open_pidfd(record["pid"])
+        except ProcessLookupError:
+            path.unlink(missing_ok=True)
+            return False
+        try:
+            if process_identity(record["pid"]) != expected:
+                return False
+            pidfd.send_signal(fd, signal.SIGTERM)
+            poller = select.poll()
+            poller.register(fd, select.POLLIN)
+            if not poller.poll(5000):
+                pidfd.send_signal(fd, signal.SIGKILL)
+                if not poller.poll(3000):
+                    raise AppError("web_stop_failed", "Web 服务尚未退出，请检查进程状态。", 5)
+        except ProcessLookupError:
+            pass
+        finally:
+            os.close(fd)
+        try:
+            if json.loads(path.read_text()) == record:
+                path.unlink(missing_ok=True)
+        except FileNotFoundError:
+            pass
+        try:
+            os.waitpid(record["pid"], os.WNOHANG)
+        except ChildProcessError:
+            pass
+        return True
 
     def web(self):
         gateway = self.web_gateway()
@@ -161,7 +315,12 @@ class Manager:
         check_name(name)
         old = self.store.read()
         if create and name in old["subs"]:
-            raise AppError("already_exists", f"订阅 {name} 已存在。", 5, "用 sub set 修改来源。")
+            raise AppError(
+                "already_exists",
+                Message("订阅 {name} 已存在。", name=name),
+                5,
+                "用 sub set 修改来源。",
+            )
         if not create:
             _, existing = self.subscription(old, name)
             source = source or existing["source"]

@@ -9,7 +9,7 @@ from pathlib import Path
 import maxminddb
 
 from .bundle import ASSET_ROOT
-from .errors import AppError
+from .errors import AppError, Message
 
 # Filename aliases recognized by mihomo's constant/path.go.
 ASSETS = {
@@ -40,7 +40,7 @@ def check_geodata(directory):
         if kind and path.is_file() and not valid_asset(path, kind):
             raise AppError(
                 "invalid_geodata",
-                f"内核下载的地理数据库 {path.name} 无效；订阅尚未保存。",
+                Message("内核下载的地理数据库 {name} 无效；订阅尚未保存。", name=path.name),
                 suggestion="检查 geox-url 来源返回的数据库文件是否完整。",
             )
 

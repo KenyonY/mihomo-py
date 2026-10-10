@@ -25,7 +25,7 @@ python -m pip install mihomo-py
 mihomo-py
 ```
 
-需要 **Python 3.11+**、支持 pidfd 的 **Linux 5.3+** 内核，支持 **x86_64 / aarch64**、系统 Python 和 Conda。建议终端至少 **80 × 24**；界面当前使用中文。
+需要 **Python 3.11+**、支持 pidfd 的 **Linux 5.3+** 内核，支持 **x86_64 / aarch64**、系统 Python 和 Conda。建议终端至少 **80 × 24**；TUI 首次按系统语言选择中文或英文。
 
 1. 点击 **添加**，或按 `Ctrl+A`，填写名称和订阅 URL / 本地 YAML 路径。
 2. 选中订阅，按 `Enter` 使用。
@@ -51,7 +51,7 @@ mihomo-py
 
 ![Web：与 TUI 共用配置的订阅管理](docs/assets/web-subscriptions.png)
 
-执行 `python -m pip install 'mihomo-py[web]'`，在 TUI 中启动或重启内核，点击 **Web 面板** 获取地址和登录密钥。独立 Web 入口还可管理订阅。[配置方法 →](docs/subscriptions-web.md)
+执行 `python -m pip install 'mihomo-py[web]'`，进入 TUI 后点击 **开启 Web**；服务会在后台持续运行，点击 **Web 面板** 获取地址和登录密钥。独立 Web 入口可管理订阅。[配置方法 →](docs/subscriptions-web.md)
 
 ## 更多用法
 

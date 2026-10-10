@@ -9,9 +9,14 @@ from pathlib import Path
 from .errors import AppError
 
 DEFAULT_SETTINGS = {
-    "host": "127.0.0.1", "controller_host": "0.0.0.0",
-    "proxy_port": 7897, "controller_port": 9090, "mode": "rule"
+    "host": "127.0.0.1",
+    "controller_host": "0.0.0.0",
+    "proxy_port": 7897,
+    "controller_port": 9090,
+    "mode": "rule",
 }
+LANGUAGE_OPTIONS = ("auto", "zh", "en")
+DEFAULT_LANGUAGE = "auto"
 
 
 def valid_host(host):
@@ -75,15 +80,26 @@ class Store:
     def read(self):
         path = self.root / "state.json"
         if not path.exists():
-            return {"version": 1, "selected": None, "settings": dict(DEFAULT_SETTINGS), "subs": {}}
+            return {
+                "version": 1,
+                "language": DEFAULT_LANGUAGE,
+                "selected": None,
+                "settings": dict(DEFAULT_SETTINGS),
+                "subs": {},
+            }
         try:
             state = json.loads(path.read_text())
+            # Language preference was added without changing the state version.
+            # Old state files follow the system language until the user chooses one.
+            if isinstance(state, dict):
+                state.setdefault("language", DEFAULT_LANGUAGE)
             # Released settings predate the configurable proxy / controller binds.
             if isinstance(state, dict) and isinstance(state.get("settings"), dict):
                 state["settings"].setdefault("host", DEFAULT_SETTINGS["host"])
                 state["settings"].setdefault("controller_host", DEFAULT_SETTINGS["controller_host"])
             if not (
                 state["version"] == 1
+                and state["language"] in LANGUAGE_OPTIONS
                 and isinstance(state["subs"], dict)
                 and (state["selected"] is None or state["selected"] in state["subs"])
                 and valid_settings(state["settings"])

@@ -6,7 +6,7 @@ import urllib.parse
 import urllib.request
 
 from .config import normalize_source
-from .errors import AppError
+from .errors import AppError, Message
 from .store import controller_address
 
 DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204"
@@ -59,7 +59,7 @@ class Controller:
             code = 4 if exc.code in (401, 403) else 3 if exc.code == 404 else 1
             raise AppError(
                 "api_error",
-                f"内核 API 请求失败（HTTP {exc.code}）。",
+                Message("内核 API 请求失败（HTTP {status}）。", status=exc.code),
                 code,
                 "刷新后重试；测速失败可更换测试地址或节点。",
                 retryable=exc.code >= 500,

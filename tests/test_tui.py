@@ -1,5 +1,6 @@
 import asyncio
 import errno
+import locale
 import os
 import threading
 
@@ -7,7 +8,8 @@ import pytest
 from textual.widgets import Button, DataTable, Input, Select, Static, TabbedContent
 
 from mihomo_py.controller import Controller
-from mihomo_py.errors import AppError
+from mihomo_py.errors import AppError, Message
+from mihomo_py.i18n import detect_system_language, translated_message
 from mihomo_py.manager import Manager
 from mihomo_py.tui import Details, Form, MihomoApp
 
@@ -20,6 +22,56 @@ async def settled(app, pilot):
     await pilot.pause()
     await asyncio.wait_for(app.workers.wait_for_complete(), 20)
     await pilot.pause()
+
+
+async def test_system_language_detection_and_fallback(monkeypatch):
+    for name in ("LC_ALL", "LC_MESSAGES", "LANGUAGE", "LANG"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    assert detect_system_language() == "en"
+    monkeypatch.setenv("LC_ALL", "zh_CN.UTF-8")
+    assert detect_system_language() == "zh"
+    monkeypatch.setenv("LC_ALL", "C.UTF-8")
+    assert detect_system_language() == "zh"
+    monkeypatch.delenv("LC_ALL")
+
+    def broken_locale(*_):
+        raise locale.Error()
+
+    monkeypatch.setattr(locale, "getlocale", broken_locale)
+    assert detect_system_language() == "zh"
+    await asyncio.sleep(0)
+
+
+async def test_english_translates_structured_backend_errors():
+    error = AppError(
+        "api_error",
+        Message("内核 API 请求失败（HTTP {status}）。", status=404),
+        4,
+        "刷新后重试；测速失败可更换测试地址或节点。",
+    )
+    assert translated_message("en", error.message) == "Core API request failed (HTTP 404)."
+    assert translated_message("en", error.suggestion) == (
+        "Refresh and try again; if the latency test fails, try another target or node."
+    )
+
+
+async def test_language_can_be_changed_from_header_and_persisted(tmp_path, monkeypatch):
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    manager = Manager(tmp_path / "home")
+    app = MihomoApp(manager)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        assert app.language == "en"
+        assert "Proxy manager" in str(app.query_one("#brand", Static).content)
+        await pilot.click("#language")
+        assert isinstance(app.screen, Form)
+        app.screen.query_one("#language", Select).value = "zh"
+        await pilot.click("#form-submit")
+        await settled(app, pilot)
+        assert app.language == "zh"
+        assert "代理管理" in str(app.query_one("#brand", Static).content)
+        assert manager.store.read()["language"] == "zh"
 
 
 async def test_empty_ui_keyboard_and_modal_cancel(tmp_path):
@@ -328,7 +380,8 @@ async def test_error_details_include_safe_context_without_credentials(tmp_path, 
             except OSError as error:
                 raise AppError("source_unavailable", "无法读取订阅来源。") from error
         raise AppError(
-            "validation_failed", "mihomo 拒绝此配置，原配置未替换。",
+            "validation_failed",
+            "mihomo 拒绝此配置，原配置未替换。",
             suggestion=f"查看本地诊断文件：{tmp_path / 'validation.log'}",
         )
 
@@ -347,7 +400,9 @@ async def test_error_details_include_safe_context_without_credentials(tmp_path, 
             assert str(tmp_path / "validation.log") in content
         else:
             code = {
-                "permission": errno.EACCES, "wrapped": errno.ENOSPC, "wrapped_app": errno.ENOENT
+                "permission": errno.EACCES,
+                "wrapped": errno.ENOSPC,
+                "wrapped_app": errno.ENOENT,
             }[kind]
             assert errno.errorcode[code] in content
             assert os.strerror(code) in content
@@ -545,6 +600,33 @@ def populated_snapshot(app, monkeypatch):
     }
     monkeypatch.setattr(app, "read_snapshot", lambda: snapshot)
     return snapshot
+
+
+async def test_language_switch_preserves_page_filters_and_log_position(tmp_path, monkeypatch):
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    app = MihomoApp(Manager(tmp_path / "home"))
+    snapshot = populated_snapshot(app, monkeypatch)
+    snapshot["logs"] = "\n".join(f"line {i}" for i in range(120))
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        app.query_one(TabbedContent).active = "nodes"
+        await pilot.pause()
+        app.query_one("#filter", Input).value = "production-"
+        app.query_one("#node-table", DataTable).move_cursor(row=3)
+        app.query_one(TabbedContent).active = "logs"
+        await pilot.pause()
+        await pilot.press("pageup")
+        assert not app.log_following
+        old_log = str(app.query_one("#log-text", Static).content)
+        await pilot.click("#language")
+        app.screen.query_one("#language", Select).value = "zh"
+        await pilot.click("#form-submit")
+        await settled(app, pilot)
+        assert app.language == "zh"
+        assert app.query_one(TabbedContent).active == "logs"
+        assert app.query_one("#filter", Input).value == "production-"
+        assert not app.log_following
+        assert str(app.query_one("#log-text", Static).content) == old_log
 
 
 @pytest.mark.parametrize("label", ["测试延迟", "更新订阅"])

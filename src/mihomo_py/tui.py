@@ -3,6 +3,7 @@
 import asyncio
 import errno
 import os
+from dataclasses import replace
 from itertools import chain
 
 from rich.text import Text
@@ -27,7 +28,59 @@ from . import clipboard
 from .bundle import dashboard_root
 from .controller import DEFAULT_TEST_URL, Controller, instance_id
 from .errors import AppError
-from .store import valid_host
+from .i18n import localized_text, resolve_language, translated_message
+from .store import LANGUAGE_OPTIONS, valid_host
+
+
+def error_message(error, language="zh"):
+    if isinstance(error, AppError):
+        message = translated_message(language, error.message)
+        if error.suggestion:
+            message += " " + translated_message(language, error.suggestion)
+        return message
+    if isinstance(error, OSError):
+        return (
+            localized_text(language, "local_io_error", errno=error.errno)
+            if error.errno is not None
+            else localized_text(language, "operation_failed", type=type(error).__name__)
+        )
+    return localized_text(language, "operation_failed", type=type(error).__name__)
+
+
+def error_details(error, operation, language="zh"):
+    """Describe safe error metadata, never raw exceptions or core diagnostics."""
+    lines = [
+        f"{localized_text(language, 'error_operation')}：{operation}"
+        if language == "zh"
+        else f"{localized_text(language, 'error_operation')}: {operation}",
+        f"{localized_text(language, 'error_type')}：{type(error).__name__}"
+        if language == "zh"
+        else f"{localized_text(language, 'error_type')}: {type(error).__name__}",
+    ]
+    if isinstance(error, AppError):
+        label = localized_text(language, "error_code")
+        separator = "：" if language == "zh" else ": "
+        lines.extend([f"{label}{separator}{error.kind}", error_message(error, language)])
+    else:
+        lines.append(error_message(error, language))
+    cause = error if isinstance(error, OSError) else error.__cause__
+    if isinstance(cause, OSError) and cause.errno is not None:
+        code = cause.errno
+        separator = "：" if language == "zh" else ": "
+        lines.extend(
+            [
+                f"{localized_text(language, 'cause')}{separator}{type(cause).__name__}",
+                (
+                    f"{localized_text(language, 'system_error')}{separator}"
+                    f"{errno.errorcode.get(code, 'UNKNOWN')} (errno={code})"
+                    if language == "en"
+                    else f"{localized_text(language, 'system_error')}{separator}"
+                    f"{errno.errorcode.get(code, 'UNKNOWN')}（errno={code}）"
+                ),
+                f"{localized_text(language, 'system_reason')}{separator}{os.strerror(code)}",
+            ]
+        )
+    return "\n".join(lines)
 
 
 class StableTable(DataTable):
@@ -40,6 +93,11 @@ class StableTable(DataTable):
         self.column_widths = ()
 
     def on_resize(self):
+        self.set_records(self.records)
+
+    def set_headings(self, headings):
+        self.headings = tuple(headings)
+        self.column_widths = ()
         self.set_records(self.records)
 
     async def _on_click(self, event: events.Click) -> None:
@@ -93,12 +151,15 @@ class StableTable(DataTable):
 
 
 class LogScroll(VerticalScroll):
-    BINDINGS = [Binding("end", "tail", "继续跟随")]
+    BINDINGS = [Binding("end", "tail", "Resume")]
 
     def watch_scroll_y(self, old_value, new_value):
         super().watch_scroll_y(old_value, new_value)
         if new_value < old_value and new_value < self.max_scroll_y and not self.app.updating_logs:
             self.app.pause_logs()
+
+    def on_mount(self):
+        self.app.localize_bindings(self, {"tail": "follow"})
 
     def on_resize(self):
         if self.app.log_following:
@@ -125,14 +186,26 @@ class LogScroll(VerticalScroll):
 
 class Dialog(ModalScreen):
     BINDINGS = [
-        Binding("escape", "cancel", "关闭"),
-        Binding("f8", "error_details", "错误详情", show=False),
+        Binding("escape", "cancel", "Close"),
+        Binding("f8", "error_details", "Error details", show=False),
     ]
 
     def on_click(self, event: events.Click):
         if event.button == 1 and event.widget is self:
             event.stop()
             self.action_cancel()
+
+    def on_mount(self):
+        self.localize_bindings()
+
+    def localize_bindings(self):
+        self.app.localize_bindings(
+            self,
+            {
+                "cancel": "cancel" if isinstance(self, Form) else "close",
+                "error_details": "error_details",
+            },
+        )
 
     def action_cancel(self):
         self.dismiss()
@@ -151,7 +224,7 @@ class Details(Dialog):
             yield Static(self.heading, classes="dialog-title", markup=False)
             with VerticalScroll(id="detail-scroll", can_focus=True):
                 yield Static(self.content, markup=False)
-            yield Button("关闭 · Esc", id="detail-close", variant="primary")
+            yield Button(f"{self.app.t('close')} · Esc", id="detail-close", variant="primary")
 
     @on(Button.Pressed, "#detail-close")
     def close(self, event):
@@ -159,34 +232,8 @@ class Details(Dialog):
         self.action_cancel()
 
 
-def error_message(error):
-    if isinstance(error, AppError):
-        return str(error) + (f" {error.suggestion}" if error.suggestion else "")
-    if isinstance(error, OSError):
-        return f"本地 IO 操作失败（errno={error.errno}）。"
-    return f"操作失败（{type(error).__name__}），请重试。"
-
-
-def error_details(error, operation):
-    """Describe safe error metadata, never raw exceptions or core diagnostics."""
-    lines = [f"操作：{operation}", f"异常：{type(error).__name__}"]
-    if isinstance(error, AppError):
-        lines.extend([f"错误代码：{error.kind}", error_message(error)])
-    else:
-        lines.append(error_message(error))
-    cause = error if isinstance(error, OSError) else error.__cause__
-    if isinstance(cause, OSError) and cause.errno is not None:
-        code = cause.errno
-        lines.extend([
-            f"原因异常：{type(cause).__name__}",
-            f"系统错误：{errno.errorcode.get(code, 'UNKNOWN')}（errno={code}）",
-            f"系统原因：{os.strerror(code)}",
-        ])
-    return "\n".join(lines)
-
-
 class Form(Dialog):
-    BINDINGS = [("escape", "cancel", "取消")]
+    BINDINGS = [("escape", "cancel", "Cancel")]
 
     def action_cancel(self):
         if not self.app.busy:
@@ -217,14 +264,15 @@ class Form(Dialog):
                         yield Input(value=value, password=password, id=key, compact=True)
             yield Static("", id="form-error", markup=False)
             with Horizontal(classes="buttons"):
-                yield Button("确定", variant="primary", id="form-submit")
-                yield Button("取消", id="form-cancel")
-                yield Button("错误详情", id="form-details", disabled=True)
+                yield Button(self.app.t("confirm"), variant="primary", id="form-submit")
+                yield Button(self.app.t("cancel"), id="form-cancel")
+                yield Button(self.app.t("error_details"), id="form-details", disabled=True)
 
     def on_mount(self):
-        inputs = list(self.query(Input))
-        if inputs:
-            inputs[0].focus()
+        self.localize_bindings()
+        fields = list(self.query(Input)) + list(self.query(Select))
+        if fields:
+            fields[0].focus()
         else:
             self.query_one("#form-cancel", Button).focus()
 
@@ -241,12 +289,14 @@ class Form(Dialog):
             widget = self.query_one(f"#{key}")
             values[key] = str(widget.value).strip()
             if not values[key]:
-                self.field_error(key, "请填写此字段。")
+                self.field_error(key, self.app.t("fill_field"))
                 return
         self.submit(values, self)
 
     def field_error(self, key, message):
-        self.app.show_error(AppError("invalid_field", message, 2), operation="检查表单")
+        self.app.show_error(
+            AppError("invalid_field", message, 2), operation=self.app.t("form_operation")
+        )
         widget = self.query_one(f"#{key}")
         widget.add_class("invalid")
         widget.focus()
@@ -278,7 +328,7 @@ class Form(Dialog):
 
 class MihomoApp(App):
     TITLE = "mihomo-py"
-    SUB_TITLE = "服务器代理管理"
+    SUB_TITLE = "Server proxy manager"
     ENABLE_COMMAND_PALETTE = False
     READ_ONLY_BUTTONS = {"detail-close", "log-follow", "error-details"}
     BINDINGS = [
@@ -319,6 +369,10 @@ class MihomoApp(App):
         )
         self.theme = "mihomo-night"
         self.manager = manager
+        state = manager.store.read()
+        self.language_preference = state["language"]
+        self.language = resolve_language(self.language_preference)
+        self.sub_title = self.t("app_subtitle")
         self.busy = False
         self.reading = False
         self.revision = 0
@@ -328,6 +382,7 @@ class MihomoApp(App):
         self.sub_names = []
         self.last_error = None
         self.last_error_details = None
+        self.last_error_exception = None
         self.next_focus = None
         self.delay_results = {}
         self.testing_node = None
@@ -336,84 +391,131 @@ class MihomoApp(App):
         self.updating_logs = False
         self.page_focus = {}
 
+    def t(self, key, **values):
+        return localized_text(self.language, key, **values)
+
+    def language_name(self):
+        return self.t("language_name_zh" if self.language == "zh" else "language_name_en")
+
+    def label(self, key, value):
+        return f"{self.t(key)}：{value}" if self.language == "zh" else f"{self.t(key)}: {value}"
+
+    def localize_bindings(self, node, labels):
+        for key, bindings in node._bindings.key_to_bindings.items():
+            node._bindings.key_to_bindings[key] = [
+                replace(binding, description=self.t(labels[binding.action]))
+                if binding.action in labels
+                else binding
+                for binding in bindings
+            ]
+        if node is self.screen:
+            node.refresh_bindings()
+
+    def update_binding_labels(self):
+        labels = {
+            "quit": "quit",
+            "copy_selection": "copy",
+            "refresh": "refresh",
+            "add": "add_sub",
+            "page('subscriptions')": "subscriptions",
+            "page('nodes')": "nodes",
+            "page('logs')": "logs",
+            "search": "search",
+            "clear_search": "clear_search",
+            "details": "details",
+            "help": "help",
+            "error_details": "error_details",
+        }
+        self.localize_bindings(self, labels)
+        if self.screen:
+            self.screen.refresh_bindings()
+
     def compose(self) -> ComposeResult:
         with Horizontal(id="masthead"):
-            yield Static("mihomo  /  代理管理", id="brand")
-            yield Static("本机 · mihomo-py", id="edition")
+            yield Static(self.t("brand"), id="brand")
+            yield Static(self.t("edition"), id="edition")
+            yield Button("中文 / EN", id="language")
         with Horizontal(id="overview"):
             with Vertical(id="kernel-metric", classes="metric"):
-                yield Static("内核", classes="metric-label")
-                yield Static("○  读取中", id="status", classes="metric-value", markup=False)
+                yield Static(self.t("kernel"), classes="metric-label")
+                yield Static(self.t("reading"), id="status", classes="metric-value", markup=False)
             with Vertical(id="subscription-metric", classes="metric"):
-                yield Static("订阅 · 已选 / 运行", classes="metric-label")
+                yield Static(self.t("subscription_metric"), classes="metric-label")
                 yield Static("—", id="subscription-value", classes="metric-value", markup=False)
             with Vertical(id="proxy-metric", classes="metric"):
-                yield Static("本机代理", classes="metric-label")
+                yield Static(self.t("proxy_metric"), classes="metric-label")
                 yield Static("—", id="proxy-value", classes="metric-value")
             with Vertical(id="mode-metric", classes="metric"):
-                yield Static("路由模式", classes="metric-label")
+                yield Static(self.t("mode_metric"), classes="metric-label")
                 yield Static("—", id="mode-value", classes="metric-value")
         with Horizontal(id="controls", classes="buttons"):
-            yield Button("启动", id="start", variant="success")
-            yield Button("停止", id="stop", variant="error")
-            yield Button("重启", id="restart")
-            yield Button("设置", id="settings")
-            yield Button("Web 面板", id="web")
-            yield Button("刷新", id="refresh")
+            yield Button(self.t("start"), id="start", variant="success")
+            yield Button(self.t("stop"), id="stop", variant="error")
+            yield Button(self.t("restart"), id="restart")
+            yield Button(self.t("settings"), id="settings")
+            yield Button(self.t("web_start"), id="web-toggle")
+            yield Button(self.t("web"), id="web")
+            yield Button(self.t("refresh"), id="refresh")
         with TabbedContent():
-            with TabPane("1 订阅", id="subscriptions"):
-                yield Static(
-                    "订阅库   /   ↑↓ 选择，双击或 Enter 使用", id="sub-hint", classes="hint"
-                )
+            with TabPane(f"1 {self.t('subscriptions')}", id="subscriptions"):
+                yield Static(self.t("sub_hint"), id="sub-hint", classes="hint")
                 with Vertical(classes="list-area"):
-                    yield StableTable(("", "订阅", "来源", "更新于"), id="subs")
+                    yield StableTable(
+                        ("", self.t("sub_col"), self.t("source_col"), self.t("updated_col")),
+                        id="subs",
+                    )
                     yield Static(
-                        "还没有订阅\n\n添加订阅 URL 或本地 YAML，开始配置代理\n\nCtrl+A 添加订阅",
+                        self.t("sub_empty"),
                         id="sub-empty",
                         classes="empty",
                     )
                 with Horizontal(classes="buttons"):
-                    yield Button("添加", id="add")
-                    yield Button("使用", id="use", variant="primary")
-                    yield Button("更新", id="update")
-                    yield Button("改来源", id="edit")
-                    yield Button("删除", id="remove", variant="error")
-            with TabPane("2 节点", id="nodes"):
+                    yield Button(self.t("add"), id="add")
+                    yield Button(self.t("use"), id="use", variant="primary")
+                    yield Button(self.t("update"), id="update")
+                    yield Button(self.t("edit"), id="edit")
+                    yield Button(self.t("remove"), id="remove", variant="error")
+            with TabPane(f"2 {self.t('nodes')}", id="nodes"):
                 with Horizontal(id="node-filters"):
-                    yield Select([], prompt="选择代理组", id="group", compact=True)
-                    yield Input(placeholder="/ 搜索节点名称", id="filter", compact=True)
-                yield Static("启动内核后显示节点", id="group-hint", markup=False)
+                    yield Select([], prompt=self.t("group_prompt"), id="group", compact=True)
+                    yield Input(placeholder=self.t("node_search"), id="filter", compact=True)
+                yield Static(self.t("group_hint"), id="group-hint", markup=False)
                 with Vertical(classes="list-area"):
-                    yield StableTable(("", "节点", "类型", "延迟"), id="node-table")
+                    yield StableTable(
+                        ("", self.t("node_col"), self.t("type_col"), self.t("delay_col")),
+                        id="node-table",
+                    )
                     yield Static(
-                        "选择订阅并启动内核后，即可查看节点",
+                        self.t("node_empty"),
                         id="node-empty",
                         classes="empty",
                         markup=False,
                     )
                 with Horizontal(classes="buttons"):
-                    yield Button("切换节点", id="select-node", variant="primary")
-                    yield Button("测试延迟", id="test-node")
+                    yield Button(self.t("select_node"), id="select-node", variant="primary")
+                    yield Button(self.t("test_latency"), id="test-node")
                 with Horizontal(id="test-tools"):
-                    yield Static("目标", id="test-label")
+                    yield Static(self.t("target"), id="test-label")
                     yield Input(
                         value=DEFAULT_TEST_URL,
-                        placeholder="延迟测试 URL",
+                        placeholder=self.t("latency_url"),
                         id="test-url",
                         compact=True,
                     )
-            with TabPane("3 日志", id="logs"):
+            with TabPane(f"3 {self.t('logs')}", id="logs"):
                 with Horizontal(id="log-tools"):
-                    yield Static("最近 200 行 · 跟随中", id="log-hint", classes="hint")
-                    yield Button("暂停", id="log-follow")
+                    yield Static(self.t("log_hint"), id="log-hint", classes="hint")
+                    yield Button(self.t("pause"), id="log-follow")
                 with LogScroll(id="log-scroll", can_focus=True):
-                    yield Static("尚无日志", id="log-text", markup=False)
+                    yield Static(self.t("no_logs"), id="log-text", markup=False)
         with Horizontal(id="feedback"):
-            yield Static("退出界面会保留运行中的内核。", id="message", markup=False)
-            yield Button("错误详情", id="error-details", disabled=True)
+            yield Static(self.t("keep_core"), id="message", markup=False)
+            yield Button(self.t("error_details"), id="error-details", disabled=True)
         yield Footer()
 
     def on_mount(self):
+        self.refresh_language_labels()
+        self.update_binding_labels()
         self.on_resize()
         self.query_one("#add", Button).focus()
         self.action_refresh()
@@ -442,9 +544,8 @@ class MihomoApp(App):
             )
             return not isinstance(self.screen, ModalScreen) and not editing
         if action == "clear_search":
-            return (
-                not isinstance(self.screen, ModalScreen)
-                and self.focused is self.query_one("#filter")
+            return not isinstance(self.screen, ModalScreen) and self.focused is self.query_one(
+                "#filter"
             )
         return True
 
@@ -499,31 +600,17 @@ class MihomoApp(App):
         if not text and isinstance(self.focused, Input):
             text = self.focused.selected_text
         if not text:
-            self.notify("没有选中内容：鼠标拖选文本后再复制；退出请按 q 或 Ctrl+Q。")
+            self.notify(self.t("no_selection"))
             return
         self.copy_to_clipboard(text)
         self.screen.clear_selection()
-        self.notify(f"已发送选中的 {len(text)} 个字符到剪贴板。")
+        self.notify(self.t("copied", count=len(text)))
 
     def action_help(self):
         self.show_dialog(
             Details(
-                "键盘操作",
-                (
-                    "1 / 2 / 3    订阅 / 节点 / 日志\n"
-                    "Tab / Shift-Tab    下一个 / 上一个控件\n"
-                    "↑ / ↓    选择列表行\nEnter    使用订阅 / 切换手动组节点\n"
-                    "/    搜索节点；Esc 清空并返回列表\ni    查看当前行完整信息\n"
-                    "Ctrl-R    刷新\nCtrl-A    添加订阅\nF8    查看完整错误\n"
-                    "End    日志恢复跟随\n?    打开帮助\nEsc    关闭弹窗\n"
-                    "Ctrl-C / Ctrl-Shift-C    复制选中的文本\n"
-                    "q / Ctrl-Q    退出（保留内核）\n\n"
-                    "输入框保留文本编辑快捷键；弹窗内不切换页面。\n"
-                    "● 表示已选订阅 / 生效节点，高亮背景表示正在浏览的行。\n"
-                    "订阅单击选择，双击、Enter 或使用按钮执行；运行中切换会重启内核。\n"
-                    "点击弹窗外部可关闭；执行中的表单需等待完成。\n"
-                    "日志可能包含订阅内部地址。"
-                ),
+                self.t("keyboard_help_title"),
+                self.t("help_text"),
             )
         )
 
@@ -536,11 +623,13 @@ class MihomoApp(App):
             status = self.snapshot["status"]
             self.show_dialog(
                 Details(
-                    "订阅详情",
+                    self.t("sub_details"),
                     (
-                        f"名称：{sub['name']}\n来源：{sub['source']}\n更新于：{sub['updated_at']}\n\n"
-                        f"已选订阅：{status['selected'] or '—'}\n"
-                        f"运行订阅：{status['running_subscription'] or '—'}"
+                        f"{self.label('name', sub['name'])}\n"
+                        f"{self.label('source', sub['source'])}\n"
+                        f"{self.label('updated', sub['updated_at'])}\n\n"
+                        f"{self.label('selected_sub', status['selected'] or '—')}\n"
+                        f"{self.label('running_sub', status['running_subscription'] or '—')}"
                     ),
                 )
             )
@@ -550,14 +639,17 @@ class MihomoApp(App):
                 for n in Controller.members(self.snapshot["proxies"], self.group_name)
                 if n["name"] == self.current_node()
             )
+            active = self.t("yes") if node["selected"] else self.t("no")
             self.show_dialog(
                 Details(
-                    "节点详情",
+                    self.t("node_details"),
                     (
-                        f"名称：{node['name']}\n代理组：{self.group_name}\n类型：{node['type']}\n"
-                        f"当前生效：{'是' if node['selected'] else '否'}\n"
-                        f"延迟：{self.node_delay(node)}\n"
-                        f"{self.delay_errors.get(node['name'], '')}"
+                        f"{self.label('name', node['name'])}\n"
+                        f"{self.label('group', self.group_name)}\n"
+                        f"{self.label('type', node['type'])}\n"
+                        f"{self.label('active', active)}\n"
+                        f"{self.label('delay', self.node_delay(node))}\n"
+                        f"{self.node_error(node['name'])}"
                     ),
                 )
             )
@@ -566,7 +658,7 @@ class MihomoApp(App):
         if isinstance(self.screen, Details):
             return
         if self.last_error:
-            self.show_dialog(Details("错误详情", self.last_error_details))
+            self.show_dialog(Details(self.t("error_details"), self.last_error_details))
 
     def pause_logs(self):
         self.log_following = False
@@ -577,22 +669,27 @@ class MihomoApp(App):
         self.render_logs(force=True)
 
     def update_log_hint(self):
-        pending = self.snapshot and self.snapshot["logs"] != str(
-            self.query_one("#log-text", Static).content
-        )
-        state = "跟随中" if self.log_following else "已暂停 · End 继续"
+        displayed = self.snapshot["logs"] or self.t("no_logs") if self.snapshot else ""
+        pending = self.snapshot and displayed != str(self.query_one("#log-text", Static).content)
+        state = self.t("log_following") if self.log_following else self.t("log_paused")
         if not self.log_following and pending:
-            state += " · 有更新"
-        self.query_one("#log-hint", Static).update(f"最近 200 行 · {state}")
-        self.query_one("#log-follow", Button).label = "暂停" if self.log_following else "继续"
+            state += f" · {self.t('log_updated')}"
+        self.query_one("#log-hint", Static).update(self.t("log_recent", state=state))
+        self.query_one("#log-follow", Button).label = (
+            self.t("pause") if self.log_following else self.t("resume")
+        )
 
     def render_logs(self, *, force=False):
         widget = self.query_one("#log-text", Static)
-        changed = self.snapshot and str(widget.content) != self.snapshot["logs"]
-        if self.snapshot and self.log_following and (changed or force):
+        displayed = self.snapshot["logs"] or self.t("no_logs") if self.snapshot else ""
+        changed = self.snapshot and str(widget.content) != displayed
+        should_render = self.snapshot and (
+            self.log_following and (changed or force)
+            or not self.snapshot["logs"] and changed
+        )
+        if should_render:
             self.updating_logs = True
-            if changed:
-                widget.update(self.snapshot["logs"])
+            widget.update(displayed)
 
             def follow():
                 if self.log_following:
@@ -611,9 +708,9 @@ class MihomoApp(App):
             try:
                 proxies = Controller(self.manager.engine, instance_id(record)).proxies()
             except AppError as error:
-                api_error = error_message(error)
+                api_error = error
         log_path = self.manager.engine.log_path
-        logs = "尚无日志"
+        logs = ""
         if log_path.exists():
             with log_path.open("rb") as stream:
                 size = stream.seek(0, 2)
@@ -622,9 +719,9 @@ class MihomoApp(App):
                 data = stream.read(256 * 1024)
                 if start:
                     data = data.partition(b"\n")[2]
-                logs = "\n".join(data.decode(errors="replace").splitlines()[-200:]) or "尚无日志"
+                logs = "\n".join(data.decode(errors="replace").splitlines()[-200:])
         if instance_id(self.manager.engine.running()) != instance_id(record):
-            raise AppError("stale_instance", "内核状态已变化，正在刷新。", 5)
+            raise AppError("stale_instance", self.t("stale_refresh"), 5)
         return {
             "status": status,
             "subs": subs,
@@ -657,7 +754,7 @@ class MihomoApp(App):
                 and not self.busy
                 and not isinstance(self.screen, ModalScreen)
             ):
-                self.show_error(error, operation="刷新状态")
+                self.show_error(error, operation=self.t("refresh"))
         finally:
             self.reading = False
             if revision != self.revision:
@@ -668,23 +765,27 @@ class MihomoApp(App):
         self.snapshot = snapshot
         status = snapshot["status"]
         state = (
-            "运行正常"
+            self.t("state_healthy")
             if status["healthy"]
-            else "运行中 / API 未就绪"
+            else self.t("state_pending")
             if status["running"]
-            else "已停止"
+            else self.t("state_stopped")
         )
         settings = status["running_settings"] or status["settings"]
         status_widget = self.query_one("#status", Static)
-        display_state = "API 未就绪" if status["running"] and not status["healthy"] else state
+        display_state = (
+            self.t("api_pending") if status["running"] and not status["healthy"] else state
+        )
         status_widget.update(f"{'●' if status['running'] else '○'}  {display_state}")
         status_widget.set_class(status["healthy"], "online")
         status_widget.set_class(status["running"] and not status["healthy"], "pending")
-        status_widget.tooltip = f"{state} · PID {status['pid'] or '—'}"
+        status_widget.tooltip = self.t("status_tooltip", state=state, pid=status["pid"] or "—")
         selected, running = status["selected"] or "—", status["running_subscription"] or "—"
         subscription = selected if selected == running else f"{selected} / {running}"
         self.query_one("#subscription-value", Static).update(subscription)
-        self.query_one("#subscription-value").tooltip = Text(f"已选：{selected} · 运行：{running}")
+        self.query_one("#subscription-value").tooltip = Text(
+            self.t("selected_running", selected=selected, running=running)
+        )
         address = f"{settings['host']}:{settings['proxy_port']}"
         self.query_one("#proxy-value", Static).update(address)
         self.query_one("#proxy-value").tooltip = address
@@ -747,11 +848,17 @@ class MihomoApp(App):
     def node_delay(self, node):
         name = node["name"]
         if name == self.testing_node:
-            return "测试中…"
+            return self.t("testing")
         if name in self.delay_errors:
-            return "失败"
+            return self.t("failed")
         delay = self.delay_results.get(name, node["delay_ms"])
-        return f"{delay} ms" if delay is not None else "待测"
+        return f"{delay} ms" if delay is not None else self.t("pending")
+
+    def node_error(self, node):
+        error = self.delay_errors.get(node)
+        if not error:
+            return ""
+        return f"\n\n{error_details(error, self.t('test_latency'), self.language)}"
 
     def update_nodes(self):
         if not self.snapshot:
@@ -762,14 +869,18 @@ class MihomoApp(App):
         empty = self.query_one("#node-empty", Static)
         records = []
         if self.group_name not in proxies:
-            hint.update("节点列表")
+            hint.update(self.t("node_list"))
             hint.tooltip = None
             if self.snapshot["api_error"]:
-                empty.update("内核 API 不可用\n\n" + self.snapshot["api_error"])
+                empty.update(
+                    self.t("api_unavailable")
+                    + "\n\n"
+                    + error_message(self.snapshot["api_error"], self.language)
+                )
             elif not self.snapshot["status"]["running"]:
-                empty.update("内核已停止\n\n选择订阅并启动内核后，即可查看节点")
+                empty.update(self.t("core_stopped") + "\n\n" + self.t("start_to_view"))
             else:
-                empty.update("暂无可用代理组\n\n请检查订阅配置后刷新")
+                empty.update(self.t("no_groups") + "\n\n" + self.t("check_config"))
         else:
             group = proxies[self.group_name]
             search = self.query_one("#filter", Input).value.casefold()
@@ -785,19 +896,34 @@ class MihomoApp(App):
                             Text("●", style=self.current_theme.accent) if node["selected"] else "",
                             node["name"],
                             node["type"],
-                            Text(delay, style=self.current_theme.error if delay == "失败" else ""),
+                            Text(
+                                delay,
+                                style=self.current_theme.error if delay == self.t("failed") else "",
+                            ),
                         ),
                     )
                 )
-            action = "Enter 切换" if group["type"] == "Selector" else "自动选择 · 仅查看/测速"
+            action = self.t("enter_switch") if group["type"] == "Selector" else self.t("auto_view")
             hint.update(
                 Text(
-                    f"{len(records)}/{len(nodes)} 节点 · 当前 {group.get('now') or '自动'} "
-                    f"· {action}"
+                    self.t(
+                        "nodes_count",
+                        shown=len(records),
+                        total=len(nodes),
+                        current=group.get("now") or ("自动" if self.language == "zh" else "auto"),
+                        action=action,
+                    )
                 )
             )
-            hint.tooltip = Text(f"{group['type']} · 当前：{group.get('now') or '自动'} · {action}")
-            empty.update("没有匹配的节点\n\nEsc 清空搜索，或尝试其他名称")
+            hint.tooltip = Text(
+                self.t(
+                    "group_current",
+                    type=group["type"],
+                    current=group.get("now") or ("自动" if self.language == "zh" else "auto"),
+                    action=action,
+                )
+            )
+            empty.update(self.t("no_match"))
         table.set_records(records)
         self.node_names = [name for name, _ in records]
         table.display = bool(records)
@@ -818,31 +944,38 @@ class MihomoApp(App):
             running = status["running"]
             name = self.current_sub()
             use_restarts = bool(name) and running and name != status["running_subscription"]
-            update_restarts = bool(name) and running and name in (
-                status["selected"], status["running_subscription"]
+            update_restarts = (
+                bool(name)
+                and running
+                and name in (status["selected"], status["running_subscription"])
             )
             use = self.query_one("#use", Button)
-            use.label = "使用并重启" if use_restarts else "使用"
-            use.tooltip = (
-                "应用此订阅，将重启内核并短暂中断连接。"
-                if use_restarts else "应用此订阅；内核停止时不会自动启动。"
-            )
+            use.label = self.t("use_restart") if use_restarts else self.t("use")
+            use.tooltip = self.t("use_tip_restart") if use_restarts else self.t("use_tip")
             update = self.query_one("#update", Button)
-            update.label = "更新并应用" if update_restarts else "更新"
-            warning = "配置有变化时将重启内核并短暂中断连接。"
-            update.tooltip = warning if update_restarts else "读取来源并校验、保存订阅。"
+            update.label = self.t("update_apply") if update_restarts else self.t("update")
+            warning = self.t("restart_warning")
+            update.tooltip = warning if update_restarts else self.t("update_tip")
             self.query_one("#edit", Button).tooltip = (
-                warning if update_restarts else "修改来源并重新读取、校验订阅。"
+                warning if update_restarts else self.t("edit_tip")
             )
-            action = "双击/Enter 使用并重启" if use_restarts else "双击/Enter 使用"
-            warning_hint = " · 更新变更将重启" if update_restarts else ""
+            action = self.t("action_use_restart") if use_restarts else self.t("action_use")
+            warning_hint = self.t("update_restart_hint") if update_restarts else ""
             self.query_one("#sub-hint", Static).update(
-                f"{len(self.sub_names)} 个订阅 · 单击选择 · {action}{warning_hint} · i 详情"
+                self.t(
+                    "update_hint", count=len(self.sub_names), action=action, warning=warning_hint
+                )
             )
             disabled.update(
-                start=not status["selected"], stop=not running, restart=not running,
+                start=not status["selected"],
+                stop=not running,
+                restart=not running,
                 web=dashboard_root() is None or not (running or self.manager.web_gateway()),
             )
+            gateway = self.manager.web_gateway()
+            toggle = self.query_one("#web-toggle", Button)
+            toggle.label = self.t("web_stop") if gateway else self.t("web_start")
+            disabled["web-toggle"] = dashboard_root() is None
             for key in ("use", "update", "edit", "remove"):
                 disabled[key] = not self.current_sub()
             disabled["remove"] = not self.current_sub() or (
@@ -861,9 +994,7 @@ class MihomoApp(App):
                     has_error = has_error and bool(form.query_one("#form-error", Static).content)
                 button.display = has_error
                 unavailable = not has_error
-            button.disabled = unavailable or (
-                self.busy and button.id not in self.READ_ONLY_BUTTONS
-            )
+            button.disabled = unavailable or (self.busy and button.id not in self.READ_ONLY_BUTTONS)
         for widget in chain.from_iterable(
             screen.query("Input, Select") for screen in self.screen_stack
         ):
@@ -871,10 +1002,12 @@ class MihomoApp(App):
                 isinstance(parent, Form) for parent in widget.ancestors
             )
 
-    def show_error(self, error, *, operation="界面操作"):
-        message = error_message(error)
+    def show_error(self, error, *, operation=None):
+        operation = operation or self.t("form_operation")
+        message = error_message(error, self.language)
         self.last_error = message
-        self.last_error_details = error_details(error, operation)
+        self.last_error_exception = error
+        self.last_error_details = error_details(error, operation, self.language)
         self.query_one("#message", Static).update(message)
         self.query_one("#message").set_classes("error")
         if isinstance(self.screen, Form):
@@ -883,7 +1016,7 @@ class MihomoApp(App):
         self.update_buttons()
 
     def subscription_progress(self, message):
-        self.call_from_thread(self.show_progress, message)
+        self.call_from_thread(self.show_progress, translated_message(self.language, message))
 
     def show_progress(self, message):
         if not self.busy:
@@ -893,7 +1026,10 @@ class MihomoApp(App):
             self.screen.query_one("#form-error", Static).update(message)
             self.screen.query_one("#form-error").add_class("progress")
 
-    def operate(self, label, operation, form=None, *, focus=None, success=None):
+    def operate(
+        self, label, operation, form=None, *, focus=None, success=None, on_success=None,
+        locked=True,
+    ):
         if self.busy:
             return
         form_focus = self.focused if form else None
@@ -901,34 +1037,45 @@ class MihomoApp(App):
         self.revision += 1
         self.last_error = None
         self.last_error_details = None
+        self.last_error_exception = None
         self.query_one("#message").set_classes("progress")
         self.query_one("#message", Static).update(f"{label}…")
         self.update_buttons()
         self.run_worker(
-            self.run_operation(label, operation, form, focus, success, form_focus),
+            self.run_operation(
+                label, operation, form, focus, success, form_focus, on_success, locked
+            ),
             group="operation",
         )
 
-    async def run_operation(self, label, operation, form, focus, success, form_focus):
+    async def run_operation(
+        self, label, operation, form, focus, success, form_focus, on_success=None, locked=True
+    ):
         def execute():
-            with self.manager.store.lock():
-                return operation()
+            if locked:
+                with self.manager.store.lock():
+                    return operation()
+            return operation()
 
         try:
             result = await asyncio.to_thread(execute)
             if isinstance(result, dict) and "delay_ms" in result:
                 self.delay_results[result["name"]] = result["delay_ms"]
-                message = f"{result['name']}：{result['delay_ms']} ms"
+                message = self.t("delay_result", name=result["name"], delay=result["delay_ms"])
             else:
-                message = success or f"{label}完成"
+                message = success or self.t("operation_done", label=label)
             self.next_focus = focus
             if form:
                 form.dismiss()
+            if on_success:
+                callback_message = on_success()
+                if callback_message:
+                    message = callback_message
             self.query_one("#message", Static).update(message)
             self.query_one("#message").set_classes("success")
         except Exception as error:
             if self.testing_node:
-                self.delay_errors[self.testing_node] = error_details(error, label)
+                self.delay_errors[self.testing_node] = error
                 self.delay_results.pop(self.testing_node, None)
             self.show_error(error, operation=label)
         finally:
@@ -946,24 +1093,138 @@ class MihomoApp(App):
         if isinstance(self.screen, Details):
             self.screen.dismiss()
         elif self.busy:
-            self.query_one("#message", Static).update("操作正在完成，请稍后退出。")
+            self.query_one("#message", Static).update(self.t("progress_done"))
         elif isinstance(self.screen, ModalScreen):
             self.screen.dismiss()
         else:
             self.exit()
+
+    def action_language(self):
+        if self.busy or isinstance(self.screen, ModalScreen):
+            return
+        self.show_dialog(
+            Form(
+                self.t("language_title"),
+                [("language", self.t("language_field"), self.language_preference, False)],
+                self.save_language,
+                choices={
+                    "language": [
+                        (self.t("language_auto"), "auto"),
+                        (self.t("language_zh"), "zh"),
+                        (self.t("language_en"), "en"),
+                    ]
+                },
+            )
+        )
+
+    def save_language(self, values, form):
+        preference = values["language"]
+        if preference not in LANGUAGE_OPTIONS:
+            form.field_error("language", self.t("fill_field"))
+            return
+
+        def persist():
+            state = self.manager.store.read()
+            state["language"] = preference
+            self.manager.store.save(state)
+
+        self.operate(
+            self.t("language_save"),
+            persist,
+            form,
+            on_success=lambda: self.apply_language(preference),
+        )
+
+    def apply_language(self, preference):
+        self.language_preference = preference
+        self.language = resolve_language(preference)
+        self.sub_title = self.t("app_subtitle")
+        self.refresh_language_labels()
+        self.update_binding_labels()
+        if self.last_error_exception:
+            self.show_error(self.last_error_exception, operation=self.t("form_operation"))
+        if self.snapshot:
+            self.apply_snapshot(self.snapshot)
+        self.render_logs(force=True)
+        self.update_buttons()
+        return self.t("language_saved")
+
+    def refresh_language_labels(self):
+        for selector, key in {
+            "#brand": "brand",
+            "#edition": "edition",
+            "#start": "start",
+            "#stop": "stop",
+            "#restart": "restart",
+            "#settings": "settings",
+            "#web-toggle": "web_start",
+            "#web": "web",
+            "#refresh": "refresh",
+            "#add": "add",
+            "#edit": "edit",
+            "#remove": "remove",
+            "#select-node": "select_node",
+            "#test-node": "test_latency",
+            "#error-details": "error_details",
+            "#test-label": "target",
+        }.items():
+            widget = self.query_one(selector)
+            if isinstance(widget, Button):
+                widget.label = self.t(key)
+            else:
+                widget.update(self.t(key))
+        for widget, key in zip(
+            self.query(".metric-label"),
+            ("kernel", "subscription_metric", "proxy_metric", "mode_metric"),
+        ):
+            widget.update(self.t(key))
+        tabs = self.query_one(TabbedContent)
+        for page, number, key in (
+            ("subscriptions", 1, "subscriptions"),
+            ("nodes", 2, "nodes"),
+            ("logs", 3, "logs"),
+        ):
+            tabs.get_tab(page).label = f"{number} {self.t(key)}"
+        self.query_one("#group", Select).prompt = self.t("group_prompt")
+        self.query_one("#sub-empty", Static).update(self.t("sub_empty"))
+        self.query_one("#node-empty", Static).update(self.t("node_empty"))
+        self.query_one("#filter", Input).placeholder = self.t("node_search")
+        self.query_one("#test-url", Input).placeholder = self.t("latency_url")
+        self.query_one("#log-follow", Button).label = (
+            self.t("pause") if self.log_following else self.t("resume")
+        )
+        self.query_one("#language", Button).tooltip = self.t(
+            "language_button_auto"
+            if self.language_preference == "auto"
+            else "language_button",
+            name=self.language_name(),
+        )
+        toggle = self.query_one("#web-toggle", Button)
+        toggle.label = self.t("web_stop" if self.manager.web_gateway() else "web_start")
+        self.query_one("#subs", StableTable).set_headings(
+            ("", self.t("sub_col"), self.t("source_col"), self.t("updated_col"))
+        )
+        self.query_one("#node-table", StableTable).set_headings(
+            ("", self.t("node_col"), self.t("type_col"), self.t("delay_col"))
+        )
+        self.localize_bindings(self.query_one("#log-scroll", LogScroll), {"tail": "follow"})
+        self.query_one("#sub-hint", Static).update(self.t("sub_hint"))
+        self.query_one("#log-hint", Static).update(self.t("log_hint"))
+        if not self.last_error:
+            self.query_one("#message", Static).update(self.t("keep_core"))
 
     def action_add(self):
         if self.busy or isinstance(self.screen, ModalScreen):
             return
         self.show_dialog(
             Form(
-                "添加订阅",
+                self.t("add_dialog"),
                 [
-                    ("sub-name", "订阅名称", "", False),
-                    ("sub-source", "订阅 URL 或本地 YAML 路径", "", False),
+                    ("sub-name", self.t("sub_name"), "", False),
+                    ("sub-source", self.t("sub_source"), "", False),
                 ],
                 lambda values, form: self.operate(
-                    "添加订阅",
+                    self.t("add_dialog"),
                     lambda: self.manager.put_sub(
                         values["sub-name"],
                         values["sub-source"],
@@ -972,7 +1233,7 @@ class MihomoApp(App):
                     ),
                     form,
                     focus=("#subs", values["sub-name"]),
-                    success="已添加订阅，按 Enter 使用。",
+                    success=self.t("added"),
                 ),
             )
         )
@@ -1001,9 +1262,10 @@ class MihomoApp(App):
         if name and not self.query_one("#use", Button).disabled:
             stopped = not self.snapshot["status"]["running"]
             self.operate(
-                "切换订阅", lambda: self.manager.use(name),
+                self.t("switch_sub"),
+                lambda: self.manager.use(name),
                 focus=("#start", None) if stopped else None,
-                success="订阅已使用，按 Enter 启动内核。" if stopped else None,
+                success=self.t("sub_used_start") if stopped else None,
             )
 
     def select_node(self):
@@ -1011,14 +1273,13 @@ class MihomoApp(App):
         expected = self.snapshot["instance"] if self.snapshot else None
         if name and group and not self.query_one("#select-node", Button).disabled:
             self.operate(
-                "切换节点", lambda: Controller(self.manager.engine, expected).select(group, name)
+                self.t("switch_node"),
+                lambda: Controller(self.manager.engine, expected).select(group, name),
             )
 
     @on(Button.Pressed)
     def pressed(self, event):
-        if event.button.disabled or (
-            self.busy and event.button.id not in self.READ_ONLY_BUTTONS
-        ):
+        if event.button.disabled or (self.busy and event.button.id not in self.READ_ONLY_BUTTONS):
             return
         name = self.current_sub()
         button = event.button.id
@@ -1028,29 +1289,32 @@ class MihomoApp(App):
             self.pause_logs() if self.log_following else self.resume_logs()
         elif button == "refresh":
             self.action_refresh()
+        elif button == "language":
+            self.action_language()
         elif button == "add":
             self.action_add()
         elif button == "start":
-            self.operate("启动内核", self.manager.start)
+            self.operate(self.t("start"), self.manager.start)
         elif button == "stop":
-            self.operate("停止内核", self.manager.engine.stop)
+            self.operate(self.t("stop"), self.manager.engine.stop)
         elif button == "restart":
-            self.operate("重启内核", lambda: self.manager.start(restart=True))
+            self.operate(self.t("restart"), lambda: self.manager.start(restart=True))
         elif button == "use":
             self.use_sub()
         elif button == "update" and name:
             self.operate(
-                "更新订阅", lambda: self.manager.put_sub(name, progress=self.subscription_progress)
+                self.t("update"),
+                lambda: self.manager.put_sub(name, progress=self.subscription_progress),
             )
         elif button == "edit" and name:
             self.run_worker(self.edit_source(name), group="edit-source", exclusive=True)
         elif button == "remove" and name:
             self.show_dialog(
                 Form(
-                    f"删除订阅 {name} 及其缓存原文？",
+                    self.t("remove_confirm", name=name),
                     [],
                     lambda values, form: self.operate(
-                        "删除订阅", lambda: self.manager.remove(name), form
+                        self.t("remove"), lambda: self.manager.remove(name), form
                     ),
                 )
             )
@@ -1058,35 +1322,46 @@ class MihomoApp(App):
             settings = self.snapshot["status"]["settings"]
             self.show_dialog(
                 Form(
-                    "本机设置（运行中应用会重启内核）",
+                    self.t("settings_title"),
                     [
-                        ("proxy-port", "代理端口", str(settings["proxy_port"]), False),
+                        ("proxy-port", self.t("proxy_port"), str(settings["proxy_port"]), False),
                         (
-                            "controller-port", "管理 / Web 端口",
-                            str(settings["controller_port"]), False,
+                            "controller-port",
+                            self.t("controller_port"),
+                            str(settings["controller_port"]),
+                            False,
                         ),
-                        ("mode", "模式：rule / global / direct", settings["mode"], False),
+                        ("mode", self.t("mode"), settings["mode"], False),
                         (
-                            "host", "代理监听 IPv4 地址（0.0.0.0 为所有接口）",
-                            settings["host"], False,
+                            "host",
+                            self.t("proxy_host"),
+                            settings["host"],
+                            False,
                         ),
                         (
-                            "controller-host", "管理 / Web IPv4 地址（0.0.0.0 为所有接口）",
-                            settings["controller_host"], False,
+                            "controller-host",
+                            self.t("controller_host"),
+                            settings["controller_host"],
+                            False,
                         ),
                     ],
                     self.save_settings,
                     choices={
                         "mode": [
-                            ("规则 · rule", "rule"),
-                            ("全局 · global", "global"),
-                            ("直连 · direct", "direct"),
+                            (self.t("mode_rule"), "rule"),
+                            (self.t("mode_global"), "global"),
+                            (self.t("mode_direct"), "direct"),
                         ]
                     },
                 )
             )
         elif button == "web":
             self.run_worker(self.show_web(), group="web", exclusive=True)
+        elif button == "web-toggle":
+            if self.manager.web_gateway():
+                self.operate(self.t("web_stop"), self.manager.stop_web, locked=False)
+            else:
+                self.operate(self.t("web_start"), self.manager.start_web, locked=False)
         elif button == "select-node":
             self.select_node()
         elif button == "test-node" and self.current_node():
@@ -1097,7 +1372,8 @@ class MihomoApp(App):
             url = self.query_one("#test-url", Input).value
             expected = self.snapshot["instance"]
             self.operate(
-                "测试延迟", lambda: Controller(self.manager.engine, expected).test(node, url)
+                self.t("test_latency"),
+                lambda: Controller(self.manager.engine, expected).test(node, url),
             )
 
     async def edit_source(self, name):
@@ -1106,24 +1382,26 @@ class MihomoApp(App):
             if not self.is_running or self.busy or isinstance(self.screen, ModalScreen):
                 return
             if name not in state["subs"]:
-                raise AppError("not_found", "订阅已移除，请刷新后重试。", 3)
+                raise AppError("not_found", self.t("removed_refresh"), 3)
             status = self.snapshot["status"]
             restarting = status["running"] and name in (
-                status["selected"], status["running_subscription"]
+                status["selected"],
+                status["running_subscription"],
             )
             self.show_dialog(
                 Form(
-                    f"修改来源：{name}" + ("（配置变更将重启内核）" if restarting else ""),
+                    self.t("edit_source_title", name=name)
+                    + (self.t("restart_config") if restarting else ""),
                     [
                         (
                             "sub-source",
-                            "订阅 URL 或本地 YAML 路径",
+                            self.t("sub_source"),
                             state["subs"][name]["source"],
                             False,
                         )
                     ],
                     lambda values, form: self.operate(
-                        "修改来源",
+                        self.t("edit"),
                         lambda: self.manager.put_sub(
                             name,
                             values["sub-source"],
@@ -1135,18 +1413,28 @@ class MihomoApp(App):
             )
         except Exception as error:
             if self.is_running:
-                self.show_error(error, operation="读取订阅来源")
+                self.show_error(error, operation=self.t("source"))
 
     async def show_web(self):
         try:
             info = await asyncio.to_thread(self.manager.web)
             if self.is_running and not isinstance(self.screen, ModalScreen):
-                self.show_dialog(Details(
-                    "Web 面板（密钥请勿分享）",
-                    f"{info['url']}\n\n监听：{info['listen_host']}:{info['port']}\n"
-                    f"登录密钥：{info['secret']}\n\n{info['hint']}\n"
-                    "远程访问请在设置中修改管理 / Web 监听地址。",
-                ))
+                listen = f"{info['listen_host']}:{info['port']}"
+                hint = (
+                    self.t("web_local_hint")
+                    if info.get("hint")
+                    == "此入口提供订阅管理与节点面板；远程访问时换成服务器 IP。"
+                    else self.t("web_hint")
+                )
+                self.show_dialog(
+                    Details(
+                        self.t("web_title"),
+                        f"{info['url']}\n\n{self.label('listen', listen)}\n"
+                        f"{self.label('login_secret', info['secret'])}\n\n"
+                        f"{hint}\n"
+                        f"{self.t('web_remote')}",
+                    )
+                )
         except Exception as error:
             if self.is_running:
                 self.show_error(error)
@@ -1158,10 +1446,11 @@ class MihomoApp(App):
     def save_settings(self, values, form):
         for key in ("host", "controller-host"):
             if not valid_host(values[key]):
-                form.field_error(key, "须为 IPv4 地址，例如 127.0.0.1 或 0.0.0.0。")
+                form.field_error(key, self.t("ipv4_error"))
                 return
         settings = {
-            "mode": values["mode"], "host": values["host"],
+            "mode": values["mode"],
+            "host": values["host"],
             "controller_host": values["controller-host"],
         }
         for key in ("proxy-port", "controller-port"):
@@ -1170,10 +1459,10 @@ class MihomoApp(App):
                 if not 1 <= value <= 65535:
                     raise ValueError
             except ValueError:
-                form.field_error(key, "端口须为 1–65535 的整数。")
+                form.field_error(key, self.t("port_error"))
                 return
             settings[key.replace("-", "_")] = value
         if settings["proxy_port"] == settings["controller_port"]:
-            form.field_error("controller-port", "代理端口和管理端口必须不同。")
+            form.field_error("controller-port", self.t("ports_different"))
             return
-        self.operate("应用设置", lambda: self.manager.configure(settings), form)
+        self.operate(self.t("settings"), lambda: self.manager.configure(settings), form)

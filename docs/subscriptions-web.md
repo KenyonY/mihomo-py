@@ -7,6 +7,8 @@ pip install 'mihomo-py[web]'
 mihomo-py web serve --port 19091
 ```
 
+也可以在 TUI 顶部点击「开启 Web」。服务会作为独立后台进程运行，退出 TUI 后仍保持运行；再次点击「关闭 Web」只停止 Web 服务，不会停止 mihomo 内核。TUI 使用设置中的管理监听地址（默认 `0.0.0.0`）和端口 `9091`；如需自定义 Web 端口，请使用上面的命令启动。启动失败时在 TUI 显示错误，详细日志位于实例目录的 `web.log`。
+
 默认监听 `0.0.0.0:9091`。以上命令在前台运行；访问 `http://服务器IP:19091/`，输入原管理 API 密钥。密钥可用 `mihomo-py --format table web secret` 查看，即使内核未启动也可使用。密钥不写入页面文件或浏览器页面地址；服务访问日志关闭。HTTP 使用 Bearer 认证，节点面板的 WebSocket 握手使用下文说明的查询参数。
 
 页面有「订阅管理」和「节点面板」。节点面板使用包内 zashboard，HTTP / WebSocket 转发到此实例的 mihomo；切换订阅不需要换地址或重新登录。

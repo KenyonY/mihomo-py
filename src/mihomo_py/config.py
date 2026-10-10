@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 from .download import SubscriptionHTTPSHandler
-from .errors import AppError
+from .errors import AppError, Message
 
 MAX_BYTES = 8 * 1024 * 1024
 
@@ -72,7 +72,7 @@ def _fetch_once(source):
     except urllib.error.HTTPError as exc:
         raise AppError(
             "download_failed",
-            f"订阅下载失败（HTTP {exc.code}）。",
+            Message("订阅下载失败（HTTP {status}）。", status=exc.code),
             suggestion="检查订阅地址是否过期；使用 sub set 修改地址。",
             retryable=exc.code >= 500 or exc.code == 429,
         ) from exc

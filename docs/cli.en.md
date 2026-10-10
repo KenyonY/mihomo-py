@@ -130,6 +130,8 @@ mihomo-py web serve --port 19091
 
 Open `http://SERVER_IP:19091/` and log in with the same key. To obtain it with the core stopped, use `mihomo-py --format table web secret` in another terminal. The gateway runs in the foreground; stopping it leaves the core running. Its port must differ from the proxy and core management ports.
 
+The TUI also has **Enable Web** and **Disable Web** controls. Enabling starts the gateway as a detached service that remains running after the TUI exits; disabling stops only the gateway. It uses the configured management bind address (default `0.0.0.0`) and port `9091`. Startup errors appear in the TUI; details are in the instance's `web.log`.
+
 The TUI's **Web 面板** button and `core web` point to the gateway while it is running. Web settings can change the shared key; saving restarts a running core, keeps the current browser logged in, and requires other browsers to log in again. A key holder has administrator access to this instance, including reading server YAML paths. Use a trusted LAN or Tailscale. Do not share key-bearing CLI output.
 
 Web resources ship in `mihomo-py-web`; no CDN or Node.js is required at runtime. Bundled dashboard requests stay on the local service. Subscription updates, custom providers, and user-triggered latency tests still use their configured destinations. [Node dashboard details (Chinese)](web.md) · [Web gateway details (Chinese)](subscriptions-web.md).

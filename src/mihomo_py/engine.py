@@ -17,7 +17,7 @@ from pathlib import Path
 from . import pidfd
 from .bundle import core_path, seed_dashboard
 from .config import parse, render
-from .errors import AppError
+from .errors import AppError, Message
 from .geodata import check_geodata, geodata_transaction, seed_geodata
 from .store import (
     DEFAULT_SETTINGS,
@@ -121,7 +121,7 @@ class Engine:
         except OSError as exc:
             raise AppError(
                 "unsupported_platform",
-                f"当前系统无法使用 pidfd 进程控制（errno={exc.errno}）。",
+                Message("当前系统无法使用 pidfd 进程控制（errno={errno}）。", errno=exc.errno),
                 suggestion="需要 Linux 5.3+ 且容器允许 pidfd 系统调用；"
                 "Python 缺少原生接口时，兼容层支持 x86_64/aarch64 64 位环境。",
             ) from exc
@@ -151,8 +151,10 @@ class Engine:
         copied = seed_geodata(self.root, data_dir, config)
         dashboard = seed_dashboard(data_dir)
         if progress:
-            prefix = f"已复用 {len(copied)} 个地理数据文件，" if copied else "订阅已读取，"
-            progress(prefix + "正在校验配置…")
+            progress(
+                Message("已复用 {count} 个地理数据文件，正在校验配置…", count=len(copied))
+                if copied else "订阅已读取，正在校验配置…"
+            )
         fd, temporary = tempfile.mkstemp(prefix=".check-", suffix=".yaml", dir=self.root)
         try:
             with os.fdopen(fd, "w") as stream:
@@ -170,9 +172,11 @@ class Engine:
                 raise AppError(
                     "validation_timeout",
                     "订阅已读取，但内核配置校验超时；订阅尚未保存，原配置未替换。",
-                    suggestion="默认地理数据已随包提供；检查订阅的自定义数据或规则源是否可达。"
-                    "可通过 MIHOMO_PY_GEODATA_DIR 提供自定义离线地理数据；"
-                    f"详见 {self.root / 'validation.log'}。",
+                    suggestion=Message(
+                        "默认地理数据已随包提供；检查订阅的自定义数据或规则源是否可达。"
+                        "可通过 MIHOMO_PY_GEODATA_DIR 提供自定义离线地理数据；详见 {path}。",
+                        path=self.root / "validation.log",
+                    ),
                     retryable=True,
                 ) from exc
             if result.returncode:
@@ -182,7 +186,7 @@ class Engine:
                     "validation_failed",
                     "mihomo 拒绝此配置，原配置未替换。",
                     2,
-                    f"查看本地诊断文件：{self.root / 'validation.log'}",
+                    Message("查看本地诊断文件：{path}", path=self.root / "validation.log"),
                 )
             # mihomo can exit successfully after downloading an invalid MMDB.
             try:
@@ -294,7 +298,7 @@ class Engine:
                 except OSError as exc:
                     raise AppError(
                         "port_in_use",
-                        f"端口 {port} 不可用。",
+                        Message("端口 {port} 不可用。", port=port),
                         5,
                         "用 config set 指定空闲的代理端口和管理端口。",
                     ) from exc

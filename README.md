@@ -25,7 +25,7 @@ python -m pip install mihomo-py
 mihomo-py
 ```
 
-Requires **Python 3.11+**, **Linux kernel 5.3+** with pidfd support, and **x86_64 / aarch64**. Works with system Python and Conda. Recommended terminal size: **80 × 24** or larger. The interface currently uses Chinese labels.
+Requires **Python 3.11+**, **Linux kernel 5.3+** with pidfd support, and **x86_64 / aarch64**. Works with system Python and Conda. Recommended terminal size: **80 × 24** or larger. The TUI follows the system language on first launch and supports Chinese and English.
 
 1. Click **添加** (Add), or press `Ctrl+A`. Enter a name and a subscription URL or local YAML path.
 2. Select the subscription and press `Enter` to use it.
@@ -51,7 +51,7 @@ Press `3` for logs. Scroll up to pause; press `End` to resume following. Press `
 
 ![Web: subscription management using the same configuration as the TUI](docs/assets/web-subscriptions.png)
 
-Install the optional Web resources with `python -m pip install 'mihomo-py[web]'`, then start or restart the core from the TUI. Click **Web 面板** (Web dashboard) for the address and login key. A separate Web gateway also manages subscriptions. [Setup →](docs/cli.en.md#web-access)
+Install the optional Web resources with `python -m pip install 'mihomo-py[web]'`, then click **开启 Web** (Enable Web) in the TUI. The gateway stays running after the TUI exits; click **Web 面板** (Web dashboard) for the address and login key. A separate Web gateway also manages subscriptions. [Setup →](docs/cli.en.md#web-access)
 
 ## Go further
 
