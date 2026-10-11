@@ -1,11 +1,11 @@
 Bundled third-party resources
 
-mihomo v1.19.19 (unmodified upstream static Linux binaries)
+mihomo v1.19.32 (unmodified upstream static Linux binaries)
 Copyright: mihomo / Clash.Meta contributors
 License: GNU GPL v3 (see licenses/mihomo.txt)
-Source and build instructions: https://github.com/MetaCubeX/mihomo/tree/v1.19.19
-Source archive: https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.19.tar.gz
-Release: https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.19
+Source and build instructions: https://github.com/MetaCubeX/mihomo/tree/v1.19.32
+Source archive: https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.32.tar.gz
+Release: https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.32
 
 Geodata: MetaCubeX/meta-rules-dat
 License: GNU GPL v3 (see licenses/meta-rules-dat.txt)

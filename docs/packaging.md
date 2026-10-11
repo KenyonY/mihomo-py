@@ -16,7 +16,7 @@ pip 镜像需要同步项目发行包及 `pyproject.toml` 声明的 Python 依�
 
 ## 资源与更新
 
-`src/mihomo_py/_vendor/manifest.json` 锁定 mihomo v1.19.19、GEO 的不可变 Git revision、下载内容 SHA-256、解压后 SHA-256。`NOTICE.txt` 和 `licenses/` 随所有发行包分发，提供上游许可、源码链接和归属信息。`web/src/mihomo_py_web/_vendor/manifest.json` 单独锁定 zashboard 版本和静态资源哈希。
+`src/mihomo_py/_vendor/manifest.json` 锁定 mihomo v1.19.32、GEO 的不可变 Git revision、下载内容 SHA-256、解压后 SHA-256。`NOTICE.txt` 和 `licenses/` 随所有发行包分发，提供上游许可、源码链接和归属信息。`web/src/mihomo_py_web/_vendor/manifest.json` 单独锁定 zashboard 版本和静态资源哈希。
 
 二进制和数据直接提交 Git（不使用需要额外下载的 LFS 指针），构建 hook 只读取本地资源，缺少文件或哈希不符立即失败。维护者需要恢复缺失资源时可联网运行：
 

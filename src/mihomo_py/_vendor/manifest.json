@@ -1,22 +1,22 @@
 {
-  "core_version": "v1.19.19",
+  "core_version": "v1.19.32",
   "geodata_revision": "f650f96c858855b542e9fb0c1d91b9816467bf58",
   "assets": [
     {
       "path": "x86_64/mihomo",
-      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.19/mihomo-linux-amd64-v1-v1.19.19.gz",
-      "download_sha256": "b45342ef03872273a80cd8e7dca7fa041185541030de71c922715ef454336407",
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-v1-v1.19.32.gz",
+      "download_sha256": "306f81e723e60ce6b828899a6fe83e1d00e9ecefb2dc8d4d849312a5bc00efdc",
       "gzip": true,
-      "sha256": "de5bc9d5d798aa887781486db738e0bf45f808e9cd7e89930e74ddb4d2cf2129",
-      "size": 35631252
+      "sha256": "6de241191ca39f9ac1cd6e3194fc9303c19055d3549c8bdb4ff1349c89173819",
+      "size": 62054526
     },
     {
       "path": "aarch64/mihomo",
-      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.19/mihomo-linux-arm64-v1.19.19.gz",
-      "download_sha256": "5035df7d6ae01ab33090fe612ec1b98ccc68917f03a97fb62ed474dc0b99cdcc",
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-arm64-v1.19.32.gz",
+      "download_sha256": "9dd862e28b46ff7d775f169cceebc28deccaa0a9e804237d421cd2571e0caba0",
       "gzip": true,
-      "sha256": "23cb909a28d677b8322269ff8241af5fba7378e77f97c754b2a71e58bff177d0",
-      "size": 32506004
+      "sha256": "c80df2ca5159567804da883401e0118908fc1155e05df2baf3dbd4d3ecfc3754",
+      "size": 57409662
     },
     {
       "path": "geodata/country.mmdb",
@@ -48,7 +48,7 @@
     },
     {
       "path": "licenses/mihomo.txt",
-      "url": "https://raw.githubusercontent.com/MetaCubeX/mihomo/v1.19.19/LICENSE",
+      "url": "https://raw.githubusercontent.com/MetaCubeX/mihomo/v1.19.32/LICENSE",
       "download_sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
       "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
       "size": 35149
