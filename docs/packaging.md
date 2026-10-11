@@ -41,6 +41,8 @@ MIHOMO_BUILD_ARCH=aarch64 python -m build --wheel --installer uv
 
 默认按构建主机架构生成 wheel；`MIHOMO_BUILD_ARCH` 仅用于维护者交叉打包预编译资源。wheel 使用 `py3-none-manylinux_2_17_<arch>.musllinux_1_2_<arch>`，内核是静态 ELF，不依赖 Python ABI 或 glibc。Python 依赖自身的 wheel/平台支持仍由 pip 解析。源码包必须包含全部资源、构建 hook、脚本和文档。
 
+主包和 Web 包的 wheel、源码包均显式使用 Core Metadata 2.4，保持与 Twine 6 的元数据解析兼容。构建后运行 `python -m twine check --strict <本次发行包路径>`，通过后再上传。
+
 发行前必须验证：
 
 - wheel 包含且仅包含目标架构内核，带可执行权限、四份数据库、许可和 manifest；独立的 `mihomo-py-web` 包含面板 ZIP、接入脚本、许可和 manifest；源码包离线重建成功。
