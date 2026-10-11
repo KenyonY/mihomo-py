@@ -55,10 +55,21 @@ mihomo-py
 
 执行 `python -m pip install 'mihomo-py[web]'`，进入 TUI 后点击 **开启 Web**。服务默认使用 `9091` 端口和设置中的管理监听地址，退出 TUI 后仍在后台运行；点击 **Web 面板** 获取地址和登录密钥，**设置**中可以修改共享登录密钥。这个独立 Web 入口同时提供订阅管理和节点面板。[配置方法 →](docs/subscriptions-web.md)
 
+## Shell 代理与本机 TUN
+
+```bash
+# 仅对这条命令设置代理（命令须支持代理环境变量）
+mihomo-py proxy run -- curl https://example.com
+# 输出当前 Shell 可执行的代理设置；退出可用 --unset
+eval "$(mihomo-py proxy env --shell bash)"
+```
+
+需要接管本机流量时，先运行 `mihomo-py tun doctor`，再显式执行 `mihomo-py tun enable`。需要 Linux、iproute2、CAP_NET_ADMIN 和 `/dev/net/tun`；可能影响 SSH 和现有连接，节点不可用时可能断网。用 `tun status` 查看实际状态，`tun disable` 关闭。不会自动提权、配置防火墙或写入 Shell 启动文件。[详细配置与恢复方法 →](docs/cli.md#shell-代理与-tun)
+
 ## 更多用法
 
 [命令行与脚本](docs/cli.md) · [TUI 指南](docs/tui.md) · [文档导航](docs/README.md) · [离线安装](docs/packaging.md)
 
-代理默认监听 `127.0.0.1:7897`；带密钥验证的管理 API 默认监听 `0.0.0.0:9090`，可选 Web 服务默认监听 `0.0.0.0:9091`。请在可信网络使用，或在 **设置** 中修改监听地址。当前不提供 TUN 和系统代理自动配置。
+代理默认监听 `127.0.0.1:7897`；带密钥验证的管理 API 默认监听 `0.0.0.0:9090`，可选 Web 服务默认监听 `0.0.0.0:9091`。请在可信网络使用，或在 **设置** 中修改监听地址。支持显式启用 Linux 本机 TUN；默认关闭，不自动提权。Shell 代理支持环境变量输出和命令包装。
 
 *TUI 截图由当前应用和固定演示数据渲染（日志和延迟均为示例），不含真实订阅凭证；Web 截图来自隔离的本地实例。内置资源保留各自的[上游许可与归属说明](src/mihomo_py/_vendor/NOTICE.txt)。*

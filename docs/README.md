@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | Terminal UI / 终端界面 | [TUI guide](tui.en.md) | [TUI 指南](tui.md) |
 | CLI & scripting / 命令行与脚本 | [CLI reference](cli.en.md) | [命令行参考](cli.md) |
+| Shell proxy & TUN / Shell 代理与 TUN | [Usage and recovery](cli.en.md#shell-proxy-and-tun) | [使用与恢复](cli.md#shell-代理与-tun) |
 | Web setup / Web 配置 | [Web access](cli.en.md#web-access) | [订阅管理](subscriptions-web.md) · [节点面板](web.md) |
 
 The following detailed maintenance guides are currently in Chinese:

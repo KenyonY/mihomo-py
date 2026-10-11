@@ -79,3 +79,9 @@ During background work you can still read lists, switch tabs, search, pause logs
 | `q` / `Ctrl+Q` | Exit the TUI, leaving the core running |
 
 Inputs retain their normal editing shortcuts; typing in a field does not change tabs. Global tab shortcuts are inactive inside dialogs. `NO_COLOR` is supported; text and symbols also distinguish statuses.
+
+## TUN and Shell proxy
+
+Settings includes a TUN switch and saved/observed state, device, stack and IPv4/IPv6 route coverage. At 80×24, scroll the form or navigate with Tab. Enabling opens a separate confirmation with Cancel focused: CAP_NET_ADMIN and `/dev/net/tun` access are required; SSH and connectivity may be interrupted when proxies fail. Operations use the existing background lock, error details and restart rollback. With the core stopped, enabling only saves settings until startup.
+
+Settings also includes selectable Shell command examples. It does not edit the parent Shell or startup files. Configure device names, stacks, address exclusions, custom NO_PROXY and diagnostics through the [CLI](cli.en.md#shell-proxy-and-tun). Active status does not prove all targets reachable; see the CLI documentation for IPv6 and local DNS stub coverage. Disabling TUN restarts a running core; exiting the TUI leaves the core and any active TUN running.

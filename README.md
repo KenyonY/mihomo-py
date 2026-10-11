@@ -55,10 +55,19 @@ Press `3` for logs. Scroll up to pause; press `End` to resume following. Press `
 
 Install the optional Web resources with `python -m pip install 'mihomo-py[web]'`, then click **Enable Web** in the TUI. The gateway runs as a separate service on port `9091` by default, uses the configured management bind address, and stays running after the TUI exits. Click **Web** for the address and login key; **Settings** can rotate the shared login key. The same gateway manages subscriptions and embeds the node dashboard. [Setup →](docs/cli.en.md#web-access)
 
+## Shell proxy and local TUN
+
+```bash
+mihomo-py proxy run -- curl https://example.com
+eval "$(mihomo-py proxy env --shell bash)"
+```
+
+`proxy run` works with programs that honor proxy environment variables. Use `proxy env --unset --shell bash` to output cleanup commands. For local traffic interception, run `mihomo-py tun doctor`, then explicitly enable with `mihomo-py tun enable`. TUN requires Linux, iproute2, CAP_NET_ADMIN and `/dev/net/tun`; it may interrupt SSH and connectivity when proxies fail. Inspect with `tun status`, disable with `tun disable`. No automatic privilege elevation, firewall changes or Shell startup file edits. [Configuration and recovery →](docs/cli.en.md#shell-proxy-and-tun)
+
 ## Go further
 
 [CLI & scripting](docs/cli.en.md) · [TUI guide](docs/tui.en.md) · [Documentation](docs/README.md) · [Offline installation](docs/packaging.md)
 
-The proxy listens on `127.0.0.1:7897` by default. The authenticated management API listens on `0.0.0.0:9090`; the optional Web gateway listens on `0.0.0.0:9091`. Use a trusted network or change the bind address in **Settings**. TUN and automatic system proxy setup are outside the current scope.
+The proxy listens on `127.0.0.1:7897` by default. The authenticated management API listens on `0.0.0.0:9090`; the optional Web gateway listens on `0.0.0.0:9091`. Use a trusted network or change the bind address in **Settings**. Linux local TUN is explicitly opt-in and disabled by default. Shell proxy environment output and command wrapping are available; privileges are never elevated automatically.
 
 *TUI screenshots render the current application with fixed demo data (including sample logs and latency), without real subscription credentials. The Web screenshot uses an isolated local instance. Bundled resources retain their [upstream notices](src/mihomo_py/_vendor/NOTICE.txt).*

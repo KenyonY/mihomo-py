@@ -86,7 +86,7 @@ core-data/        # 按订阅隔离的内核数据、provider 和节点选择缓
 
 目录默认权限 0700；客户端写入的状态、配置和日志文件为 0600。缓存包含订阅凭证，列举订阅时仅展示脱敏地址。
 
-本机设置默认代理监听地址 `127.0.0.1`、代理端口 `7897`、管理端口 `9090`、路由模式 `rule`。模式可选 `rule/global/direct`。HTTP/SOCKS 共用代理端口，监听地址由本机 `host` 设置决定；管理接口由 `controller_host` 控制，默认监听 `0.0.0.0`，使用持久化的随机密钥；安装 `[web]` 后提供面板。当前固定禁用订阅携带的其他入站端口、自定义 listeners/tunnels、TUN、DNS/DoH 监听、iptables 接管、NTP 及订阅指定的外部 UI，保留节点、代理组、规则、DNS 解析配置，并启用节点选择缓存。代理端口不启用用户名密码验证。后续阶段再提供显式的入站和网络接管配置。
+本机设置默认代理监听地址 `127.0.0.1`、代理端口 `7897`、管理端口 `9090`、路由模式 `rule`。模式可选 `rule/global/direct`。HTTP/SOCKS 共用代理端口，监听地址由本机 `host` 设置决定；管理接口由 `controller_host` 控制，默认监听 `0.0.0.0`，使用持久化的随机密钥；安装 `[web]` 后提供面板。当前固定禁用订阅携带的其他入站端口、自定义 listeners/tunnels、DNS/DoH 监听、iptables 接管、NTP 及订阅指定的外部 UI，保留节点、代理组、规则、DNS 解析配置，并启用节点选择缓存。代理端口不启用用户名密码验证。TUN 由本机设置显式启用，订阅不能启用或覆盖其策略。
 
 订阅原文不会被本机设置改写；更新后重新合成运行配置。下载默认直连，不使用 `HTTP_PROXY/HTTPS_PROXY`；上限 8 MiB、网络操作超时 20 秒。HTTPS 连接在 TCP 或 TLS 失败时尝试域名的其他地址，每个连接/握手阶段最多等待 5 秒，地址尝试共用 20 秒预算；始终校验证书与原始域名。订阅下载超时自动重试一次，并在 TUI 中提示。使用 `mihomo -t` 校验合成配置；默认 GEO 数据由包内资源提供；订阅自定义的数据和规则源仍可能触发下载。内核校验/启动超时可用全局 `--timeout 60` 调整。
 
@@ -98,7 +98,7 @@ core-data/        # 按订阅隔离的内核数据、provider 和节点选择缓
 
 运行中更新、切换订阅或修改本机设置会短暂中断连接：校验成功后重启；新实例启动失败时尝试恢复旧实例，失败则明确报告。状态文件在成功启动后提交；普通启动失败保留旧订阅记录。文件内容先 fsync，再通过 rename 原子替换；不承诺目录项在断电后的持久化。进程和文件无法形成跨资源原子事务，断电或强制终止仍可能使运行状态与选择不同；`core status` 分别展示两者，`core start` 重新应用已保存选择。
 
-进程管理核对 PID、启动时间、启动标识及命令行，并通过 pidfd 发送信号；不使用 `pkill`。不同 `--data-dir` 可运行独立实例，但必须设置不同端口。默认不配置 systemd，也不修改 shell 代理环境。
+进程管理核对 PID、启动时间、启动标识及命令行，并通过 pidfd 发送信号；不使用 `pkill`。不同 `--data-dir` 可运行独立实例，但必须设置不同端口。默认不配置 systemd；Shell 代理命令只输出语句或设置子进程环境。
 
 ## 脚本与错误处理
 
@@ -139,3 +139,57 @@ python -m build --installer uv
 配置字段参考 [mihomo 全局配置](https://wiki.metacubex.one/config/general/)。
 
 更多文档见 [文档导航](README.md)。
+
+## Shell 代理与 TUN
+
+### Shell 代理
+
+```bash
+mihomo-py proxy env                          # 管道默认 JSON，终端默认文本
+mihomo-py proxy env --format json
+mihomo-py proxy env --shell bash             # 也支持 zsh / fish / posix
+eval "$(mihomo-py proxy env --shell bash)"
+eval "$(mihomo-py proxy env --unset --shell bash)"
+mihomo-py proxy run -- curl https://example.com
+mihomo-py config set --no-proxy 'localhost,127.0.0.1,::1,.example.internal'
+mihomo-py proxy run --no-proxy '' -- curl https://example.com
+```
+
+`proxy env` 返回 `running`、`host`、`port`、`variables`。变量包括大小写的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`，默认绕过 `localhost,127.0.0.1,::1`。运行时使用实际实例端口，停止时使用保存的端口；`0.0.0.0` 转成客户端可用的 `127.0.0.1`。HTTP/HTTPS 变量使用 `http://`，ALL_PROXY 使用 `socks5h://`。`--no-proxy` 可临时替换保存的绕过列表；具体匹配语义由目标程序决定。
+
+Shell 输出经过引用，只有用户执行输出语句才会改变自己的 Shell。fish 中可执行 `mihomo-py proxy env --shell fish | source`。`--unset` 清除这八个变量，不恢复此前值；关闭内核不会清除父 Shell 的变量。命令不写 `.bashrc`、`.zshrc` 或持久化用户环境。使用自定义实例时，所有示例应在子命令前添加 `--data-dir PATH`。
+
+`proxy run` 直接执行参数列表、不解析 Shell 字符串，覆盖大小写代理变量并保留其他环境，透传 stdin/stdout/stderr 和退出码。它只适用于支持代理环境变量的程序；不支持的程序需要 TUN。内核停止或不健康时返回 `core_stopped`，退出码 3；命令不存在/不可执行分别为 127/126。子命令输出不会包装成 JSON。
+
+### TUN 启用、检查与恢复
+
+```bash
+mihomo-py tun doctor
+mihomo-py tun enable --dry-run
+mihomo-py tun enable --device mihomo --stack mips --exclude-address 192.168.1.0/24
+mihomo-py tun status
+mihomo-py tun disable
+# 脚本中必须明确确认；--exclude-address 可重复，指定时替换整个列表
+mihomo-py tun enable --yes --exclude-address 203.0.113.10/32
+mihomo-py tun enable --yes --clear-excludes
+```
+
+本机设置新增 `tun: {enabled: false, device: mihomo, stack: mips, exclude_address: []}` 和 `no_proxy`。旧状态和进程记录读取时自动补全；TUN 默认关闭。设备名为 1–15 个字母、数字、点、下划线或连字符；协议栈可选 `mips/system/gvisor/mixed`。IP/CIDR 排除地址会标准化，适合绕过管理连接或内网服务。排除不会自动识别或保证 SSH 连接不中断，请保留独立的恢复通道。
+
+TUN 需要 Linux、iproute2、有效的 CAP_NET_ADMIN 及 `/dev/net/tun` 读写权限；受限容器中的 root 不一定具有这些权限。客户端不执行 sudo/pkexec、不设置文件 capabilities，不提供自动权限安装。管理员须确保启动的内核实际继承所需权限。包内内核已锁定到支持 mips 的 v1.19.32；自定义内核由真实配置校验确认兼容性。
+
+启用前检查设备和路由占用、真实配置校验。交互 CLI 和 TUI 显示网络风险确认；非交互 CLI 必须 `--yes`。内核停止时只保存设置，下一次 `core start` 才创建 TUN。运行时先校验再重启，启动失败尝试恢复旧实例；TUN 失败不会自动降级。启用可能影响 SSH 和已有连接；代理不可用时本机网络可能中断。
+
+生成的配置固定 `auto-route: true`、`auto-detect-interface: true`、`auto-redirect: false`、TCP/UDP `any:53` DNS 劫持。保留订阅的解析器、fallback、fake-ip 设置并强制启用 DNS，始终移除 DNS listen。无自定义解析器时沿用内核默认解析器。继续提供 HTTP/SOCKS 混合端口。订阅不能指定其他入站、TUN 接管或防火墙策略。
+
+`config show` 同时提供保存的 `tun` 设置和 `tun_status`；`core status` 提供 `tun` 状态。`configured` 表示保存的开关，`active` 要求受本实例进程持有且已启用的设备、健康内核，以及完整的 IPv4 路由和策略规则；启动时存在 IPv6 路由的实例也要求 IPv6 规则完整。`ipv4/ipv6` 分别报告完整性。规则丢失后，`core start` 会重建实例。`running_device/running_stack` 表示运行中的参数，`restart_required` 提示保存与运行状态不一致。`active` 不证明所有目标都可访问。IPv6 取决于订阅的顶层 `ipv6`、宿主网络和实际生成的路由；关闭 IPv6 时不会宣称已接管 IPv6。发往 `127.0.0.53` 等本地 DNS stub 的请求不直接进入 TUN；其上游请求只有经过 TUN 路由且未排除时才会被劫持。DoH/DoT 不属于 53 端口 DNS 劫持范围。
+
+首期同一网络命名空间共用保留路由表 2022 和规则优先级 9000–9020。即使设备名不同，已有 TUN 或外部规则占用这些资源也会明确拒绝；需要并行 TUN 实例时使用独立网络命名空间。不会删除其他实例的设备或规则。普通 HTTP/SOCKS 实例仍可使用不同目录和端口并行运行。
+
+`tun doctor` 检查权限、设备/路由冲突，并在临时目录执行真实内核配置校验，不启动 TUN、不修改当前实例。诊断复制当前订阅的 GEO 缓存和实例的 GEO 覆盖文件，支持已有自定义 GEO 缓存的离线校验；本地 provider 文件须在校验环境中可用。输出 `ok/checks/status/proposed`，检查失败退出码 1。`--device/--stack/--exclude-address/--clear-excludes` 可检查候选设置。`tun enable/disable --dry-run` 只输出 JSON 操作意图，退出码 10，不创建目录或启动进程。
+
+恢复时先运行 `tun disable`；停止内核使用 `core stop`。关闭 TUN 前会确认可读取网络状态，检查失败时保留原内核。清理由 mihomo 执行，客户端核验设备及路由是否消失。替换或保存配置失败时使用同一恢复流程。停止后的临时清理检查失败会重试；残留未清理时保留进程记录并报告恢复失败，不启动普通代理覆盖该记录。遇到 `tun_cleanup_failed`，先用 `tun doctor` 和 `core logs` 检查，再由管理员核对残留，不要盲目删除主机路由。进程被强制终止可能遗留策略规则；此时会拒绝宣称清理成功。`tun_permission_denied` 退出码 4，设备或路由冲突退出码 5，设备/协议栈/地址参数错误退出码 2；启动/清理失败退出码 1。错误包含稳定类型、修复建议和 `retryable`。
+
+本期面向本机通过路由进入 TUN 的流量，不提供路由器网关、桌面系统代理或 Web TUN 配置页面。高级参数通过 CLI 设置；TUI 设置页提供开关、状态及 Shell 使用示例。
+
+真实网络验收：`pytest tests/test_tun_network.py -q`。测试使用独立 user/network namespace 和本地 HTTP/DNS 服务，覆盖 IPv4/IPv6、UDP/TCP DNS、本地 stub、地址排除、无权限、冲突、回滚和清理；不改宿主机路由或防火墙。环境需要 `ip/unshare/nsenter/setpriv`、可用的 user namespace 和 `/dev/net/tun`，不满足时明确跳过，发行验收须在支持这些能力的环境完成。

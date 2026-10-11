@@ -94,7 +94,7 @@ Directories created by the client default to 0700; its state, configuration, and
 
 `config set --host` controls the proxy bind. `--controller-host` controls the management API / dashboard independently. Both accept IPv4 addresses; `0.0.0.0` listens on all interfaces. The proxy has no username/password authentication. Use a trusted network for remote access.
 
-The rendered configuration disables subscription-supplied extra inbound ports, listeners/tunnels, TUN, DNS/DoH listeners, iptables takeover, NTP, and external UI paths. It preserves nodes, groups, rules, and DNS resolution settings, and enables persistent node choices. It does not modify shell proxy settings or install a systemd service.
+The rendered configuration disables subscription-supplied extra inbound ports, listeners/tunnels, DNS/DoH listeners, iptables takeover, NTP, and external UI paths. It preserves nodes, groups, rules, and DNS resolution settings, and enables persistent node choices. TUN is generated only from explicit local settings. Shell proxy commands print statements or set child environments; no systemd service is installed.
 
 Original subscription YAML remains unchanged. Downloads connect directly, ignoring `HTTP_PROXY` / `HTTPS_PROXY`, with an 8 MiB limit and a 20-second network timeout. HTTPS retries other resolved addresses after TCP/TLS failures, with up to five seconds per connect/handshake and a shared 20-second budget. Certificates are checked against the original hostname. A subscription download timeout is retried once.
 
@@ -175,3 +175,57 @@ python -m build --installer uv
 Real core tests use the bundled binary or `MIHOMO_TEST_BINARY`. They use temporary directories, free ports, direct routes, and local HTTP targets; they do not read existing subscriptions or alter your proxy. TLS download regression tests require `openssl` to generate temporary certificates; running the client does not.
 
 [Offline packaging and release verification (Chinese)](packaging.md) · [Documentation index](README.md).
+
+## Shell proxy and TUN
+
+### Shell proxy
+
+```bash
+mihomo-py proxy env
+mihomo-py proxy env --format json
+mihomo-py proxy env --shell bash  # bash / zsh / fish / posix
+eval "$(mihomo-py proxy env --shell bash)"
+eval "$(mihomo-py proxy env --unset --shell bash)"
+mihomo-py proxy run -- curl https://example.com
+mihomo-py config set --no-proxy 'localhost,127.0.0.1,::1,.example.internal'
+mihomo-py proxy run --no-proxy '' -- curl https://example.com
+```
+
+`proxy env` returns `running`, `host`, `port` and `variables`. It sets upper/lowercase HTTP_PROXY, HTTPS_PROXY, ALL_PROXY and NO_PROXY; the default bypass list is `localhost,127.0.0.1,::1`. HTTP/HTTPS use `http://`, ALL_PROXY uses `socks5h://`. A running instance's actual address takes precedence; when stopped, saved settings are used. A wildcard bind becomes the client destination `127.0.0.1`. `--no-proxy` temporarily replaces the saved bypass list; matching behavior depends on the target program.
+
+Output is safely quoted. Only evaluating the output changes your current Shell. For fish, use `mihomo-py proxy env --shell fish | source`. `--unset` clears the eight variables, without restoring previous values. Stopping the core does not clear the parent Shell's environment. No Shell startup files or persistent environments are edited. Add `--data-dir PATH` before the subcommand for a custom instance.
+
+`proxy run` executes an argument list without a Shell parser, overwrites proxy variables, preserves other environment values, and passes through standard input/output/error and the exit code. Programs must honor proxy environment variables; use TUN for programs that do not. A stopped/unhealthy core produces `core_stopped` with exit code 3. Missing/non-executable commands return 127/126. Child output is never wrapped in JSON.
+
+### TUN activation, inspection and recovery
+
+```bash
+mihomo-py tun doctor
+mihomo-py tun enable --dry-run
+mihomo-py tun enable --device mihomo --stack mips --exclude-address 192.168.1.0/24
+mihomo-py tun status
+mihomo-py tun disable
+# Scripts require explicit confirmation. Repeated exclusions replace the entire list.
+mihomo-py tun enable --yes --exclude-address 203.0.113.10/32
+mihomo-py tun enable --yes --clear-excludes
+```
+
+Local settings add `tun: {enabled: false, device: mihomo, stack: mips, exclude_address: []}` and `no_proxy`. Legacy state/process records receive disabled defaults on read. Device names use 1–15 letters, digits, dots, underscores or hyphens. Supported stacks are `mips/system/gvisor/mixed`. IP/CIDR exclusions are normalized; they can bypass management addresses or private networks. They do not automatically identify or guarantee preservation of SSH connections; keep an independent recovery path.
+
+TUN requires Linux, iproute2, effective CAP_NET_ADMIN and read/write access to `/dev/net/tun`. Root inside a restricted container may lack these permissions. The client never runs sudo/pkexec or installs file capabilities. Administrators must ensure that the core process inherits the required permissions. Bundled core v1.19.32 supports mips; custom binaries undergo real configuration validation.
+
+Enabling checks device and route conflicts and validates the configuration before changing a running instance. Interactive CLI and TUI require confirmation of networking risks; noninteractive CLI requires `--yes`. When stopped, enabling only saves settings; `core start` creates the TUN later. A failed replacement attempts to restore the old core and settings, without silently downgrading to ordinary proxy mode. TUN may interrupt SSH and existing connections; unavailable proxy nodes may interrupt host connectivity.
+
+Generated policy fixes `auto-route: true`, `auto-detect-interface: true`, `auto-redirect: false` and TCP/UDP `any:53` interception. DNS is enabled while preserving nameservers, fallback and fake-ip options; the DNS listener is always removed. When no custom resolvers are supplied, core defaults apply. The mixed HTTP/SOCKS port remains available. Subscriptions cannot override local TUN, inbound or firewall policy.
+
+`config show` includes saved `tun` settings plus `tun_status`; `core status` includes a `tun` status object. `configured` reports the saved switch; `active` requires an enabled device held by the verified core, a healthy core, and complete IPv4 routes and policy rules. Instances with IPv6 routes at startup also require complete IPv6 rules. `ipv4/ipv6` report completeness. After rules disappear, `core start` rebuilds the instance. `running_device/running_stack` describe actual running parameters; `restart_required` indicates a difference from saved settings. Active status does not prove reachability of every destination. IPv6 depends on the subscription's top-level `ipv6`, host networking and observed routes. Requests to local DNS stubs such as `127.0.0.53` remain local; only upstream requests routed into TUN and not excluded can be intercepted. DoH/DoT are outside port-53 DNS interception.
+
+This release reserves routing table 2022 and priorities 9000–9020 in each network namespace. Another TUN or external rules using these resources are rejected even with a different device name. Parallel TUN instances require separate network namespaces. The client never removes another instance's devices/rules. Ordinary proxy instances can still use separate directories and ports.
+
+`tun doctor` checks permissions and device/route conflicts, then validates with the real binary in a temporary directory without starting TUN or modifying the current instance. Diagnostics copy the selected subscription’s GEO cache and instance GEO overrides, allowing offline validation with cached custom datasets. Local provider resources must be available in that validation environment. Output contains `ok/checks/status/proposed`; failed checks exit 1. It accepts `--device/--stack/--exclude-address/--clear-excludes` for candidate settings. `tun enable/disable --dry-run` prints a JSON plan and exits 10 without creating directories or starting processes.
+
+Use `tun disable` to restore ordinary proxy operation, or `core stop` to stop entirely. Disabling TUN first checks network inspection availability. If that check fails, the existing core keeps running. mihomo performs cleanup; the client verifies removal of devices/routes. Replacement and configuration save failures use the same restoration path. Transient cleanup inspection failures after exit are retried. Remaining resources prevent restoration, and the failed process record is retained instead of starting an ordinary proxy. On `tun_cleanup_failed`, inspect `tun doctor` and `core logs`, then have an administrator verify residual resources instead of blindly deleting host routes. Forced termination can leave policy rules; cleanup is not reported as successful when resources remain. Permission errors exit 4; device/route conflicts exit 5; invalid device/stack/address values exit 2; startup/cleanup failures exit 1. Errors carry stable types, repair suggestions and `retryable`.
+
+This release targets local traffic routed into TUN. It does not provide router gateway support, desktop system proxy settings or a Web TUN settings page. The TUI offers a switch, status and copyable Shell examples; advanced parameters use the CLI.
+
+Run `pytest tests/test_tun_network.py -q` for network acceptance. Tests use fresh user/network namespaces and local HTTP/DNS services for IPv4/IPv6, UDP/TCP DNS, local stubs, exclusions, permission failures, conflicts, rollback and cleanup. Host routes/firewalls are untouched. Requires `ip/unshare/nsenter/setpriv`, working user namespaces and `/dev/net/tun`; unavailable environments explicitly skip this test. Release acceptance requires a capable environment.
