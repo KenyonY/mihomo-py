@@ -1060,3 +1060,38 @@ async def test_pending_source_read_cannot_open_dialog_after_quit(tmp_path, monke
             assert app.last_error is None
     finally:
         gate.set()
+
+
+async def test_tun_settings_confirmation_cancel_and_failure(tmp_path, monkeypatch):
+    manager = Manager(tmp_path / 'home')
+    app = MihomoApp(manager)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        await pilot.click('#settings')
+        form = app.screen
+        assert 'proxy env' in form.notes
+        assert 'mips' in form.notes
+        form.query_one('#tun-enabled', Select).value = 'true'
+        await pilot.click('#form-submit')
+        await pilot.pause()
+        assert isinstance(app.screen, Form)
+        assert 'CAP_NET_ADMIN' in app.screen.notes
+        assert app.focused.id == 'form-cancel'
+        assert not manager.store.root.exists()
+        await pilot.press('escape')
+        assert not manager.store.read()['settings']['tun']['enabled']
+        await pilot.click('#settings')
+        app.screen.query_one('#tun-enabled', Select).value = 'true'
+        await pilot.click('#form-submit')
+        await pilot.pause()
+
+        def denied(_):
+            raise AppError('tun_permission_denied', '缺少 TUN 访问权限或 CAP_NET_ADMIN。', 4,
+                           '运行 tun doctor。')
+
+        monkeypatch.setattr(manager, 'configure', denied)
+        await pilot.click('#form-submit')
+        await settled(app, pilot)
+        assert isinstance(app.screen, Form)
+        assert 'CAP_NET_ADMIN' in str(app.screen.query_one('#form-error', Static).content)
+        assert not manager.store.read()['settings']['tun']['enabled']

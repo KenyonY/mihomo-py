@@ -1,3 +1,4 @@
+import copy
 import fcntl
 import ipaddress
 import json
@@ -7,6 +8,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .errors import AppError
+from .tun import DEFAULT_TUN
+from .tun import validate as validate_tun
 
 DEFAULT_SETTINGS = {
     "host": "127.0.0.1",
@@ -14,6 +17,8 @@ DEFAULT_SETTINGS = {
     "proxy_port": 7897,
     "controller_port": 9090,
     "mode": "rule",
+    "no_proxy": "localhost,127.0.0.1,::1",
+    "tun": DEFAULT_TUN,
 }
 LANGUAGE_OPTIONS = ("auto", "zh", "en")
 DEFAULT_LANGUAGE = "auto"
@@ -39,6 +44,10 @@ def controller_address(settings):
 
 
 def valid_settings(settings):
+    try:
+        validate_tun(settings.get("tun"))
+    except (AppError, AttributeError):
+        return False
     return (
         isinstance(settings, dict)
         and set(settings) == set(DEFAULT_SETTINGS)
@@ -50,7 +59,14 @@ def valid_settings(settings):
         )
         and settings["mode"] in ("rule", "global", "direct")
         and settings["proxy_port"] != settings["controller_port"]
+        and isinstance(settings["no_proxy"], str)
+        and "\0" not in settings["no_proxy"]
     )
+
+
+def upgrade_settings(settings):
+    settings.setdefault("no_proxy", DEFAULT_SETTINGS["no_proxy"])
+    settings.setdefault("tun", copy.deepcopy(DEFAULT_TUN))
 
 
 def atomic_write(path: Path, content: str):
@@ -84,7 +100,7 @@ class Store:
                 "version": 1,
                 "language": DEFAULT_LANGUAGE,
                 "selected": None,
-                "settings": dict(DEFAULT_SETTINGS),
+                "settings": copy.deepcopy(DEFAULT_SETTINGS),
                 "subs": {},
             }
         try:
@@ -97,6 +113,7 @@ class Store:
             if isinstance(state, dict) and isinstance(state.get("settings"), dict):
                 state["settings"].setdefault("host", DEFAULT_SETTINGS["host"])
                 state["settings"].setdefault("controller_host", DEFAULT_SETTINGS["controller_host"])
+                upgrade_settings(state["settings"])
             if not (
                 state["version"] == 1
                 and state["language"] in LANGUAGE_OPTIONS

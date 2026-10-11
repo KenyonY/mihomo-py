@@ -9,6 +9,7 @@ import yaml
 
 from .download import SubscriptionHTTPSHandler
 from .errors import AppError, Message
+from .tun import configuration as tun_configuration
 
 MAX_BYTES = 8 * 1024 * 1024
 
@@ -144,7 +145,7 @@ def render(content, settings, secret, *, dashboard=None):
             "external-controller": f"{settings['controller_host']}:{settings['controller_port']}",
             "secret": secret,
             "mode": settings["mode"],
-            "tun": {"enable": False},
+            "tun": tun_configuration(settings),
             "authentication": [],
             # The bundled snapshot must not trigger overseas downloads after bootstrap.
             "geo-auto-update": False,
@@ -153,6 +154,12 @@ def render(content, settings, secret, *, dashboard=None):
     if dashboard is not None:
         config["external-ui"] = dashboard
     dns = config.get("dns")
+    if config["tun"]["enable"]:
+        if dns is None:
+            dns = config["dns"] = {}
+        if not isinstance(dns, dict):
+            raise AppError("invalid_config", "dns 必须是 YAML 对象。", 2)
+        dns["enable"] = True
     if isinstance(dns, dict):
         dns.pop("listen", None)
     profile = config.setdefault("profile", {})

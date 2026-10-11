@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from . import __version__
+from . import proxy as shell_proxy
 from .config import check_name, normalize_source, source_label
 from .controller import DEFAULT_TEST_URL, Controller
 from .errors import AppError
@@ -271,7 +272,10 @@ def config():
 @click.pass_context
 def config_show(ctx):
     """查看代理监听地址、端口和路由模式。"""
-    emit(ctx.obj["manager"].store.read()["settings"], ctx.obj["format"])
+    manager = ctx.obj["manager"]
+    emit(
+        {**manager.store.read()["settings"], "tun_status": manager.tun_status()}, ctx.obj["format"]
+    )
 
 
 def host_option(ctx, param, value):
@@ -289,9 +293,10 @@ def host_option(ctx, param, value):
 @click.option("--proxy-port", type=click.IntRange(1, 65535))
 @click.option("--controller-port", type=click.IntRange(1, 65535))
 @click.option("--mode", type=click.Choice(["rule", "global", "direct"]))
+@click.option("--no-proxy", help="NO_PROXY 绕过列表；空字符串清空。")
 @click.option("--dry-run", is_flag=True)
 @click.pass_context
-def config_set(ctx, host, controller_host, proxy_port, controller_port, mode, dry_run):
+def config_set(ctx, host, controller_host, proxy_port, controller_port, mode, no_proxy, dry_run):
     """保存本机设置；内核运行时重启应用，失败则恢复旧配置。"""
     values = {
         key: value
@@ -301,12 +306,110 @@ def config_set(ctx, host, controller_host, proxy_port, controller_port, mode, dr
             "proxy_port": proxy_port,
             "controller_port": controller_port,
             "mode": mode,
+            "no_proxy": no_proxy,
         }.items()
         if value is not None
     }
     if not values:
         raise click.UsageError("至少指定一项设置。")
     mutate(ctx, "config.set", values, dry_run, lambda: ctx.obj["manager"].configure(values))
+
+
+@cli.group()
+def proxy():
+    """输出 Shell 代理变量，或使用代理运行一个命令。"""
+
+
+@proxy.command("env")
+@click.option("--shell", type=click.Choice(["bash", "zsh", "fish", "posix"]))
+@click.option("--unset", is_flag=True, help="输出清除语句；不恢复先前的代理变量。")
+@click.option("--no-proxy", help="临时覆盖 NO_PROXY。")
+@click.option("--format", "fmt", type=click.Choice(["json", "table"]))
+@click.pass_context
+def proxy_env(ctx, shell, unset, no_proxy, fmt):
+    if unset and not shell:
+        raise click.UsageError("--unset 需要 --shell。")
+    if shell and fmt:
+        raise click.UsageError("--shell 与 --format 不能同时使用。")
+    result = shell_proxy.environment(ctx.obj["manager"], no_proxy)
+    if shell:
+        click.echo(shell_proxy.shell_statements(result["variables"], shell, unset))
+    else:
+        emit(result, fmt or ctx.obj["format"])
+
+
+@proxy.command("run", context_settings={"ignore_unknown_options": True})
+@click.option("--no-proxy", help="临时覆盖 NO_PROXY。")
+@click.argument("command", nargs=-1, required=True, type=click.UNPROCESSED)
+@click.pass_context
+def proxy_run(ctx, command, no_proxy):
+    """proxy run -- COMMAND [ARG...]：透传输入、输出和退出码。"""
+    ctx.exit(shell_proxy.run(ctx.obj["manager"], command, no_proxy))
+
+
+@cli.group()
+def tun():
+    """显式管理 Linux 本机 TUN；可能影响 SSH 和网络连接。"""
+
+
+@tun.command("status")
+@click.pass_context
+def tun_status(ctx):
+    emit(ctx.obj["manager"].tun_status(), ctx.obj["format"])
+
+
+def tun_options(command):
+    command = click.option("--device", help="Linux TUN 设备名。")(command)
+    command = click.option("--stack", help="mips / system / gvisor / mixed。")(command)
+    command = click.option(
+        "--exclude-address", multiple=True, help="排除 IP/CIDR，可重复。"
+    )(command)
+    command = click.option("--clear-excludes", is_flag=True, help="清空地址排除列表。")(command)
+    return command
+
+
+def tun_arguments(device, stack, exclude_address, clear_excludes):
+    if exclude_address and clear_excludes:
+        raise click.UsageError("--exclude-address 与 --clear-excludes 不能同时使用。")
+    return {"device": device, "stack": stack,
+            "exclude_address": [] if clear_excludes else list(exclude_address) or None}
+
+
+@tun.command("doctor")
+@tun_options
+@click.pass_context
+def tun_doctor(ctx, device, stack, exclude_address, clear_excludes):
+    """检查环境和真实内核配置；不启用 TUN，不修改本实例。"""
+    result = ctx.obj["manager"].tun_doctor(**tun_arguments(
+        device, stack, exclude_address, clear_excludes))
+    emit(result, ctx.obj["format"])
+    if not result["ok"]:
+        ctx.exit(1)
+
+
+@tun.command("enable")
+@tun_options
+@click.option("--yes", is_flag=True)
+@click.option("--dry-run", is_flag=True)
+@click.pass_context
+def tun_enable(ctx, device, stack, exclude_address, clear_excludes, yes, dry_run):
+    manager = ctx.obj["manager"]
+    options = tun_arguments(device, stack, exclude_address, clear_excludes)
+    target = manager.tun_options(True, **options)
+    if not dry_run and not yes:
+        if not sys.stdin.isatty():
+            raise AppError("confirmation_required", "启用 TUN 需要 --yes。", 2,
+                           "TUN 可能中断 SSH；确认网络恢复方式后添加 --yes。")
+        click.confirm("TUN 需要 CAP_NET_ADMIN，可能中断 SSH；节点不可用时本机可能断网。"
+                      "不会自动提权或修改防火墙。继续？", abort=True, err=True)
+    mutate(ctx, "tun.enable", target, dry_run, lambda: manager.configure_tun(True, **options))
+
+
+@tun.command("disable")
+@click.option("--dry-run", is_flag=True)
+@click.pass_context
+def tun_disable(ctx, dry_run):
+    mutate(ctx, "tun.disable", {}, dry_run, lambda: ctx.obj["manager"].configure_tun(False))
 
 
 @cli.group()

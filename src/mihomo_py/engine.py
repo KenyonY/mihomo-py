@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import pidfd
+from . import pidfd, tun
 from .bundle import core_path, seed_dashboard
 from .config import parse, render
 from .errors import AppError, Message
@@ -24,6 +24,7 @@ from .store import (
     atomic_write,
     controller_address,
     proxy_address,
+    upgrade_settings,
     valid_settings,
 )
 
@@ -126,14 +127,17 @@ class Engine:
                 "Python 缺少原生接口时，兼容层支持 x86_64/aarch64 64 位环境。",
             ) from exc
 
-    def data_dir(self, name, config=None):
+    def data_path(self, name, config=None):
         # Providers and selector caches from different subscriptions must not collide.
         custom = (config or {}).get("geox-url") or {}
         identity = name
         if custom:
             identity += "\0" + json.dumps(custom, sort_keys=True)
         key = hashlib.sha256(identity.encode()).hexdigest()[:16]
-        directory = self.root / "core-data" / key
+        return self.root / "core-data" / key
+
+    def data_dir(self, name, config=None):
+        directory = self.data_path(name, config)
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         return directory
 
@@ -210,6 +214,7 @@ class Engine:
                 record["settings"].setdefault(
                     "controller_host", "127.0.0.1"  # Old cores actually bound loopback.
                 )
+                upgrade_settings(record["settings"])
             if type(record["pid"]) is not int or record["pid"] <= 1:
                 raise ValueError
             identity = record["identity"]
@@ -241,14 +246,17 @@ class Engine:
             return record
         return None
 
+    @tun.serialized
     def stop(self):
         record = self.running()
         if not record:
+            tun.check_cleanup(self.record())
             return False
         self.require_process_api()
         try:
             fd = pidfd.open_pidfd(record["pid"])
         except ProcessLookupError:
+            tun.check_cleanup(record)
             return False
         try:
             if not identity_matches(
@@ -257,6 +265,7 @@ class Engine:
                 record["data_dir"],
                 self.runtime_path,
             ):
+                tun.check_cleanup(record)
                 return False
             pidfd.send_signal(fd, signal.SIGTERM)
             poller = select.poll()
@@ -269,6 +278,7 @@ class Engine:
             pass
         finally:
             os.close(fd)
+        tun.check_cleanup(record)
         self.record_path.unlink(missing_ok=True)
         return True
 
@@ -324,7 +334,11 @@ class Engine:
         except (OSError, urllib.error.URLError, ValueError):
             return False
 
+    @tun.serialized
     def launch(self, compiled, name, settings, digest, secret, *, data_directory=None):
+        tun_enabled = settings.get("tun", tun.DEFAULT_TUN)["enabled"]
+        if tun_enabled:
+            tun.preflight(settings["tun"])
         self.check_ports(settings)
         binary = self.executable()
         data_dir = str(data_directory or self.data_dir(name, parse(compiled)))
@@ -370,7 +384,13 @@ class Engine:
             while time.monotonic() < deadline:
                 if child.poll() is not None:
                     break
-                if self.healthy(record):
+                net = tun.network() if tun_enabled else None
+                if self.healthy(record) and (
+                    not tun_enabled or tun.observation(record, net)["active"]
+                ):
+                    if tun_enabled:
+                        record["tun_resources"] = tun.resources(net)
+                        atomic_write(self.record_path, json.dumps(record))
                     return record
                 time.sleep(0.1)
             raise AppError(
@@ -378,11 +398,20 @@ class Engine:
                 "内核未在期限内就绪。",
                 suggestion="运行 core logs 查看日志。",
             )
-        except BaseException:
+        except BaseException as failure:
             # This Popen handle belongs to us even if writing process.json failed.
-            child.kill()
-            child.wait()
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+            tun.check_cleanup(record)
             self.record_path.unlink(missing_ok=True)
+            if tun_enabled and isinstance(failure, AppError) and failure.kind == "start_failed":
+                raise AppError("tun_start_failed", "TUN 内核未就绪。", 1,
+                               "运行 tun doctor 和 core logs 检查权限、路由与 DNS。",
+                               True) from failure
             raise
 
     def controller_secret(self):
@@ -407,31 +436,52 @@ class Engine:
             compiled, name, settings, fingerprint(content, settings), secret
         )
 
+    @tun.serialized
     def replace_runtime(self, compiled, name, settings, digest, secret):
         """Replace an already validated runtime, restoring the previous core on failure."""
         old = self.running()
+        if not old:
+            tun.check_cleanup(self.record())
+        if settings.get("tun", tun.DEFAULT_TUN)["enabled"]:
+            tun.preflight(settings["tun"], old)
+        elif old and old["settings"].get("tun", tun.DEFAULT_TUN)["enabled"]:
+            # Disabling TUN still needs network inspection to verify cleanup.
+            # Discover an unavailable iproute2 before stopping the working core.
+            tun.network()
         previous = self.runtime_path.read_text() if old else None
         # Check changed ports before stopping the working instance.
         if old:
             self.check_ports(settings, previous=old["settings"])
-            self.stop()
         try:
+            if old:
+                self.stop()
             return self.launch(compiled, name, settings, digest, secret)
         except BaseException as failure:
-            if old:
-                try:
-                    self.launch(
-                        previous,
-                        old["subscription"],
-                        old["settings"],
-                        old["fingerprint"],
-                        old["secret"],
-                        data_directory=old["data_dir"],
-                    )
-                except Exception as rollback:
-                    raise AppError(
-                        "rollback_failed",
-                        "启动失败，恢复旧实例也失败。订阅状态未修改。",
-                        suggestion="检查 core logs 后重新 core start。",
-                    ) from rollback
+            if old and self.running() != old:
+                self.restore_runtime(
+                    previous, old["subscription"], old["settings"], old["fingerprint"],
+                    old["secret"], data_directory=old["data_dir"],
+                )
             raise failure
+
+    @tun.serialized
+    def restore_runtime(self, compiled, name, settings, digest, secret, *, data_directory):
+        """Restore after replacement or persistence failure, retaining unclean TUN evidence."""
+        try:
+            try:
+                self.stop()
+            except Exception:
+                if self.running():
+                    raise
+                # A transient inspection error after exit can be retried below.
+            # Check the failed replacement, including when restoring a plain core.
+            tun.check_cleanup(self.record())
+            return self.launch(
+                compiled, name, settings, digest, secret, data_directory=data_directory,
+            )
+        except Exception as rollback:
+            raise AppError(
+                "rollback_failed",
+                "恢复旧实例失败。订阅状态未修改。",
+                suggestion="运行 tun doctor 和 core logs 检查后重新 core start。",
+            ) from rollback

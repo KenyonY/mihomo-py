@@ -57,6 +57,17 @@ def copy_asset(source, destination):
         Path(temporary).unlink(missing_ok=True)
 
 
+def snapshot_geodata(source, destination):
+    """Copy cached GEO assets for isolated diagnostics without sharing writable files."""
+    if not source.is_dir():
+        return
+    names = {name for aliases in ASSETS.values() for name in aliases}
+    for path in source.iterdir():
+        if path.name.lower() in names and path.is_file():
+            destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+            copy_asset(path, destination / path.name)
+
+
 @contextmanager
 def geodata_transaction(directory):
     """Restore GEO files if validation fails, including files the core downloaded."""

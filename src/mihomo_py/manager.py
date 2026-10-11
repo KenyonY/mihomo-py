@@ -6,20 +6,23 @@ import select
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 import yaml
 
-from . import pidfd
+from . import pidfd, tun
 from .bundle import dashboard_root
 from .config import check_name, fetch, normalize_source, parse, source_label
 from .engine import Engine, fingerprint, process_identity
 from .errors import AppError, Message
-from .store import Store, atomic_write, controller_address, valid_host
+from .geodata import snapshot_geodata
+from .store import Store, atomic_write, controller_address, valid_host, valid_settings
 
 
 class Manager:
@@ -63,7 +66,85 @@ class Manager:
             "running_settings": running["settings"] if running else None,
             "healthy": self.engine.healthy(running) if running else False,
             "data_dir": str(self.store.root),
+            "tun": self.tun_status(state, running),
         }
+
+    def tun_status(self, state=None, running=None):
+        state = state or self.store.read()
+        running = running or self.engine.running()
+        value = state["settings"]["tun"]
+        actual = running["settings"]["tun"] if running else None
+        observed = {"active": False, "ipv4": False, "ipv6": False}
+        error = None
+        try:
+            observed = tun.observation(running)
+            if observed["active"] and not self.engine.healthy(running):
+                observed["active"] = False
+        except AppError as exc:
+            error = exc.as_dict()
+        perms = tun.permission()
+        return {
+            "configured": value["enabled"], **observed,
+            "device": value["device"], "stack": value["stack"],
+            "running_device": actual["device"] if actual and actual["enabled"] else None,
+            "running_stack": actual["stack"] if actual and actual["enabled"] else None,
+            "auto_route": True, "auto_redirect": False, "dns_hijack": tun.DNS_HIJACK,
+            "exclude_address": value["exclude_address"],
+            "permission": perms, "capability": perms["cap_net_admin"],
+            "running_subscription": running["subscription"] if running else None,
+            "restart_required": value != actual if running else value["enabled"],
+            "inspection_error": error,
+            "coverage": "Only traffic routed into TUN; loopback DNS stubs and excluded "
+                        "networks are not directly intercepted. IPv6 requires IPv6 routes.",
+        }
+
+    def tun_options(self, enabled, device=None, stack=None, exclude_address=None):
+        value = copy.deepcopy(self.store.read()["settings"]["tun"])
+        value["enabled"] = enabled
+        for key, item in (("device", device), ("stack", stack),
+                          ("exclude_address", exclude_address)):
+            if item is not None:
+                value[key] = item
+        return tun.normalized(value)
+
+    def configure_tun(self, enabled, **options):
+        self.configure({"tun": self.tun_options(enabled, **options)})
+        return self.tun_status()
+
+    def tun_doctor(self, **options):
+        state = self.store.read()
+        value = self.tun_options(True, **options)
+        checks = []
+        for name, operation in (
+            ("environment", lambda: tun.preflight(value, self.engine.running())),
+            ("configuration", lambda: self._check_tun_configuration(state, value)),
+        ):
+            try:
+                operation()
+                checks.append({"check": name, "ok": True})
+            except AppError as exc:
+                checks.append({"check": name, "ok": False, **exc.as_dict()})
+        return {"ok": all(c["ok"] for c in checks), "checks": checks,
+                "status": self.tun_status(state), "proposed": value}
+
+    def _check_tun_configuration(self, state, value):
+        name, sub = self.subscription(state)
+        settings = copy.deepcopy(state["settings"])
+        settings["tun"] = value
+        # Diagnostics validate with the real binary without changing instance files.
+        with tempfile.TemporaryDirectory(prefix="mihomo-tun-check-") as directory:
+            engine = Engine(Path(directory), self.engine.binary, self.engine.timeout)
+            try:
+                config = parse(sub["content"])
+                snapshot_geodata(
+                    self.engine.data_path(name, config), engine.data_path(name, config)
+                )
+                snapshot_geodata(self.store.root / "geodata", engine.root / "geodata")
+                engine.validate(sub["content"], settings, name)
+            except AppError as exc:
+                raise AppError(exc.kind, exc.message, exc.code,
+                               "检查订阅 DNS、协议栈及本地 provider 路径；"
+                               "诊断在临时目录校验，本地资源须可用。", exc.retryable) from exc
 
     def web_gateway(self):
         path = self.store.root / "web-service.json"
@@ -265,8 +346,7 @@ class Manager:
             self.store.save(new)
         except OSError:
             if replaced:
-                self.engine.stop()
-                self.engine.launch(
+                self.engine.restore_runtime(
                     previous,
                     running["subscription"],
                     running["settings"],
@@ -372,6 +452,18 @@ class Manager:
                 raise AppError("invalid_host", "监听地址须为 IPv4 地址，例如 0.0.0.0。", 2)
         if new["settings"]["proxy_port"] == new["settings"]["controller_port"]:
             raise AppError("invalid_ports", "代理端口和管理端口必须不同。", 2)
+        if "tun" in values:
+            new["settings"]["tun"] = tun.normalized(values["tun"])
+            if new["settings"]["tun"]["enabled"]:
+                tun.preflight(new["settings"]["tun"], self.engine.running())
+                name, sub = self.subscription(new)
+                self.engine.validate(sub["content"], new["settings"], name)
+            elif not self.engine.running():
+                # A crashed TUN core can leave policy rules behind. Do not hide
+                # failed cleanup by merely persisting a disabled setting.
+                self.engine.stop()
+        if not valid_settings(new["settings"]):
+            raise AppError("invalid_settings", "本机设置无效。", 2, "检查 config show 和命令参数。")
         self.commit(new)
         return new["settings"]
 
@@ -388,6 +480,8 @@ class Manager:
                     state["settings"],
                 )
                 and self.engine.healthy(running)
+                and (not state["settings"]["tun"]["enabled"]
+                     or tun.observation(running)["active"])
             ):
                 return self.status()
         self.engine.replace(sub["content"], state["settings"], name)

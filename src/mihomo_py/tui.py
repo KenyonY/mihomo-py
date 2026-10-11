@@ -239,17 +239,20 @@ class Form(Dialog):
         if not self.app.busy:
             self.dismiss()
 
-    def __init__(self, title, fields, submit, *, choices=None):
+    def __init__(self, title, fields, submit, *, choices=None, notes=""):
         super().__init__()
         self.heading = title
         self.fields = fields
         self.submit = submit
         self.choices = choices or {}
+        self.notes = notes
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Static(self.heading, classes="dialog-title", markup=False)
             with VerticalScroll(id="form-fields"):
+                if self.notes:
+                    yield Static(self.notes, markup=False)
                 for key, label, value, password in self.fields:
                     yield Static(label, markup=False, classes="field-label")
                     if key in self.choices:
@@ -1334,6 +1337,8 @@ class MihomoApp(App):
                             False,
                         ),
                         ("mode", self.t("mode"), settings["mode"], False),
+                        ("tun-enabled", self.t("tun_enabled"),
+                         str(settings["tun"]["enabled"]).lower(), False),
                         (
                             "host",
                             self.t("proxy_host"),
@@ -1348,7 +1353,11 @@ class MihomoApp(App):
                         ),
                     ],
                     self.save_settings,
+                    notes=self.t("tun_summary", **self.snapshot["status"]["tun"])
+                    + "\n" + self.t("shell_usage"),
                     choices={
+                        "tun-enabled": [(self.t("tun_off"), "false"),
+                                        (self.t("tun_on"), "true")],
                         "mode": [
                             (self.t("mode_rule"), "rule"),
                             (self.t("mode_global"), "global"),
@@ -1467,4 +1476,17 @@ class MihomoApp(App):
         if settings["proxy_port"] == settings["controller_port"]:
             form.field_error("controller-port", self.t("ports_different"))
             return
+        current = self.manager.store.read()["settings"]["tun"]
+        enabled = values.get("tun-enabled", str(current["enabled"]).lower()) == "true"
+        if enabled != current["enabled"]:
+            settings["tun"] = {**current, "enabled": enabled}
+            if enabled:
+                form.dismiss()
+                self.show_dialog(Form(
+                    self.t("tun_confirm"), [],
+                    lambda _, confirmation: self.operate(
+                        self.t("settings"), lambda: self.manager.configure(settings), confirmation
+                    ), notes=self.t("tun_risk"),
+                ))
+                return
         self.operate(self.t("settings"), lambda: self.manager.configure(settings), form)
