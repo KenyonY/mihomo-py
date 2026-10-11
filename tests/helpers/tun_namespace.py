@@ -5,6 +5,7 @@ import json
 import os
 import signal
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -77,7 +78,7 @@ def dns_server(host, port, stub=False):
 
 
 PEER = """
-import socket, threading, sys
+import socket, threading, sys, ssl, subprocess
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 print("ready", flush=True)
 sys.stdin.readline()
@@ -91,6 +92,17 @@ class IPv6Server(ThreadingHTTPServer): address_family = socket.AF_INET6
 for cls,host in [(ThreadingHTTPServer,"198.51.100.2"),(IPv6Server,"2001:db8:2::2")]:
     server=cls((host,18080),Handler)
     threading.Thread(target=server.serve_forever,daemon=True).start()
+cert, key = sys.argv[1] + '/cert.pem', sys.argv[1] + '/key.pem'
+subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes',
+    '-keyout',key,'-out',cert,'-subj','/CN=tun-test.example.org','-days','1'],
+    check=True, capture_output=True)
+for port in (80,443):
+    server = ThreadingHTTPServer(('198.51.100.2',port),Handler)
+    if port == 443:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(cert,key)
+        server.socket = ctx.wrap_socket(server.socket,server_side=True)
+    threading.Thread(target=server.serve_forever,daemon=True).start()
 print("serving",flush=True)
 sys.stdin.read()
 """
@@ -100,14 +112,14 @@ def main():
     # No default routes, interfaces, or firewall rules are changed outside this namespace.
     assert len(tun.network()["links"]) == 1
     ip("link", "set", "lo", "up")
+    temporary = tempfile.TemporaryDirectory()
     peer = subprocess.Popen(
-        ["unshare", "--net", sys.executable, "-u", "-c", PEER],
+        ["unshare", "--net", sys.executable, "-u", "-c", PEER, temporary.name],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
     )
     manager = None
-    temporary = tempfile.TemporaryDirectory()
     try:
         assert peer.stdout.readline().strip() == "ready"
         ip("link", "add", "uplink", "type", "veth", "peer", "name", "peer0")
@@ -230,6 +242,15 @@ def main():
             )
             assert denied.returncode == 4, denied.stderr
             assert json.loads(denied.stderr)["error"] == "tun_permission_denied"
+            inspected = subprocess.run(
+                ["setpriv", "--bounding-set=-all", sys.executable, "-m", "mihomo_py",
+                 "--data-dir", str(manager.store.root), "tun", "status"],
+                capture_output=True, text=True, timeout=10,
+            )
+            assert inspected.returncode == 0, inspected.stderr
+            assert json.loads(inspected.stdout)["inspection_error"]["error"] == (
+                "tun_inspection_denied"
+            )
             assert (manager.store.root / "state.json").read_bytes() == state_before
             assert manager.tun_status()["active"]
             # Missing inspection tools must not kill a healthy core during disable.
@@ -377,6 +398,44 @@ def main():
             except AppError as error:
                 assert error.kind == "tun_route_conflict"
             ip("rule", "del", "priority", "9005")
+            # DNS bypasses TUN. Only HTTP Host / TLS SNI identifies the domain;
+            # the intentionally wrong destination must be replaced after sniffing.
+            manager.configure_tun(True, exclude_address=[])
+            manager.configure({"mode": "rule"})
+            source.write_text(
+                'proxies: []\nrules: ["DOMAIN,tun-test.example.org,DIRECT", "MATCH,REJECT"]\n'
+                'dns: {nameserver: [127.0.0.1:1053]}\nsniffer: {enable: false}\n'
+            )
+            manager.put_sub("b")
+            manager.start()
+
+            def sniffed_request(tls=False):
+                with socket.create_connection(("203.0.113.77", 443 if tls else 80), 4) as raw:
+                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                    connection = context.wrap_socket(
+                        raw, server_hostname="tun-test.example.org"
+                    ) if tls else raw
+                    with connection:
+                        connection.sendall(
+                            b"GET / HTTP/1.1\r\nHost: tun-test.example.org\r\n"
+                            b"Connection: close\r\n\r\n"
+                        )
+                        response = http.client.HTTPResponse(connection)
+                        response.begin()
+                        assert response.status == 200
+                        assert response.read() == b"isolated HTTP response"
+
+            try:
+                sniffed_request()
+                raise AssertionError("domain rule unexpectedly worked without sniffing")
+            except (OSError, http.client.HTTPException):
+                pass
+            source.write_text(source.read_text().replace('sniffer: {enable: false}\n', ''))
+            manager.put_sub("b")
+            for tls in (False, True):
+                sniffed_request(tls)
             # SIGKILL leaves core-created policy rules; report and retain evidence.
             manager.start()
             record = manager.engine.running()

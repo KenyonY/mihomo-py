@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from . import __version__
+from . import __version__, privilege
 from . import proxy as shell_proxy
 from .config import check_name, normalize_source, source_label
 from .controller import DEFAULT_TEST_URL, Controller
@@ -45,7 +45,24 @@ def default_directory():
     return str(base / "mihomo-py")
 
 
-@click.group(invoke_without_command=True, context_settings={"help_option_names": ["-h", "--help"]})
+class AuthorizedCommand(click.Command):
+    def invoke(self, ctx):
+        privilege.authorize(ctx)
+        return super().invoke(ctx)
+
+
+class AuthorizedGroup(click.Group):
+    command_class = AuthorizedCommand
+    group_class = type
+
+    def parse_args(self, ctx, args):
+        if ctx.parent is None:
+            ctx.meta["argv"] = list(args)
+        return super().parse_args(ctx, args)
+
+
+@click.group(cls=AuthorizedGroup, invoke_without_command=True,
+             context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--data-dir",
     envvar="MIHOMO_PY_HOME",
@@ -71,9 +88,11 @@ def default_directory():
     "--format", "fmt", type=click.Choice(["json", "table"]), help="终端默认 table，管道默认 json。"
 )
 @click.option("--json", "json_output", is_flag=True, help="等同于 --format json。")
+@click.option("--sudo", "sudo_mode", is_flag=True,
+              help="通过 sudo 为本次运行获取 TUN 权限，保持原用户及数据目录。")
 @click.version_option(__version__)
 @click.pass_context
-def cli(ctx, data_dir, core_binary, timeout, fmt, json_output):
+def cli(ctx, data_dir, core_binary, timeout, fmt, json_output, sudo_mode):
     """管理服务器上的 mihomo 订阅、节点与进程；终端中直接运行进入 TUI。
 
     \b
@@ -91,6 +110,7 @@ def cli(ctx, data_dir, core_binary, timeout, fmt, json_output):
         "format": "json" if json_output else fmt or ("table" if sys.stdout.isatty() else "json"),
     }
     if ctx.invoked_subcommand is None:
+        privilege.authorize(ctx)
         if sys.stdin.isatty() and sys.stdout.isatty() and not json_output and fmt is None:
             launch_tui(ctx.obj["manager"])
         else:

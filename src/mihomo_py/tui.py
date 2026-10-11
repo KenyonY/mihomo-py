@@ -1325,6 +1325,17 @@ class MihomoApp(App):
             )
         elif button == "settings" and self.snapshot:
             settings = self.snapshot["status"]["settings"]
+            tun_status = dict(self.snapshot["status"]["tun"])
+            inspection = tun_status.get("inspection_error")
+            if inspection:
+                for key in ("active", "ipv4", "ipv6"):
+                    tun_status[key] = self.t("tun_unverified")
+            notes = self.t("tun_summary", **tun_status)
+            if inspection:
+                notes += "\n" + " ".join(
+                    translated_message(self.language, inspection.get(key, ""))
+                    for key in ("message", "suggestion")
+                )
             self.show_dialog(
                 Form(
                     self.t("settings_title"),
@@ -1353,8 +1364,7 @@ class MihomoApp(App):
                         ),
                     ],
                     self.save_settings,
-                    notes=self.t("tun_summary", **self.snapshot["status"]["tun"])
-                    + "\n" + self.t("shell_usage"),
+                    notes=notes + "\n" + self.t("shell_usage"),
                     choices={
                         "tun-enabled": [(self.t("tun_off"), "false"),
                                         (self.t("tun_on"), "true")],

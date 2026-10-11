@@ -64,7 +64,7 @@ mihomo-py proxy run -- curl https://example.com
 eval "$(mihomo-py proxy env --shell bash)"
 ```
 
-需要接管本机流量时，先运行 `mihomo-py tun doctor`，再显式执行 `mihomo-py tun enable`。需要 Linux、iproute2、CAP_NET_ADMIN 和 `/dev/net/tun`；可能影响 SSH 和现有连接，节点不可用时可能断网。用 `tun status` 查看实际状态，`tun disable` 关闭。不会自动提权、配置防火墙或写入 Shell 启动文件。[详细配置与恢复方法 →](docs/cli.md#shell-代理与-tun)
+需要接管本机流量时，用 `mihomo-py --sudo` 启动并输入 sudo 密码，再在设置中启用 TUN。CLI 可先运行 `mihomo-py --sudo tun doctor`，再执行 `mihomo-py --sudo tun enable`。需要 Linux、iproute2、CAP_NET_ADMIN 和 `/dev/net/tun`；可能影响 SSH 和现有连接，节点不可用时可能断网。用 `tun status` 查看实际状态，`tun disable` 关闭。不会自动提权、配置防火墙或写入 Shell 启动文件。[详细配置与恢复方法 →](docs/cli.md#shell-代理与-tun)
 
 ## 更多用法
 

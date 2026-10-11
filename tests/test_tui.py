@@ -1095,3 +1095,26 @@ async def test_tun_settings_confirmation_cancel_and_failure(tmp_path, monkeypatc
         assert isinstance(app.screen, Form)
         assert 'CAP_NET_ADMIN' in str(app.screen.query_one('#form-error', Static).content)
         assert not manager.store.read()['settings']['tun']['enabled']
+
+
+async def test_tun_inspection_denied_is_unverified_in_settings(tmp_path, monkeypatch):
+    manager = Manager(tmp_path / 'home')
+    original = manager.tun_status
+
+    def unavailable(*args, **kwargs):
+        status = original(*args, **kwargs)
+        status['configured'] = True
+        status['inspection_error'] = AppError(
+            'tun_inspection_denied', '无权限确认内核持有的 TUN 设备。', 4,
+            '使用 mihomo-py --sudo tun status 检查实际状态。',
+        ).as_dict()
+        return status
+
+    monkeypatch.setattr(manager, 'tun_status', unavailable)
+    app = MihomoApp(manager)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settled(app, pilot)
+        await pilot.click('#settings')
+        assert '实际接管：无法确认' in app.screen.notes
+        assert 'IPv4 路由：无法确认' in app.screen.notes
+        assert '--sudo tun status' in app.screen.notes

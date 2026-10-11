@@ -62,7 +62,7 @@ mihomo-py proxy run -- curl https://example.com
 eval "$(mihomo-py proxy env --shell bash)"
 ```
 
-`proxy run` works with programs that honor proxy environment variables. Use `proxy env --unset --shell bash` to output cleanup commands. For local traffic interception, run `mihomo-py tun doctor`, then explicitly enable with `mihomo-py tun enable`. TUN requires Linux, iproute2, CAP_NET_ADMIN and `/dev/net/tun`; it may interrupt SSH and connectivity when proxies fail. Inspect with `tun status`, disable with `tun disable`. No automatic privilege elevation, firewall changes or Shell startup file edits. [Configuration and recovery →](docs/cli.en.md#shell-proxy-and-tun)
+`proxy run` works with programs that honor proxy environment variables. Use `proxy env --unset --shell bash` to output cleanup commands. For local traffic interception, start `mihomo-py --sudo`, enter your sudo password, and enable TUN in Settings. CLI users can run `mihomo-py --sudo tun doctor`, then `mihomo-py --sudo tun enable`. TUN requires Linux, iproute2, CAP_NET_ADMIN and `/dev/net/tun`; it may interrupt SSH and connectivity when proxies fail. Inspect with `tun status`, disable with `tun disable`. No automatic privilege elevation, firewall changes or Shell startup file edits. [Configuration and recovery →](docs/cli.en.md#shell-proxy-and-tun)
 
 ## Go further
 

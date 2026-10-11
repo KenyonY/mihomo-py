@@ -160,6 +160,19 @@ def render(content, settings, secret, *, dashboard=None):
         if not isinstance(dns, dict):
             raise AppError("invalid_config", "dns 必须是 YAML 对象。", 2)
         dns["enable"] = True
+        # DNS may bypass TUN through a local stub or another VPN. Recover the
+        # domain from HTTP/TLS/QUIC so domain rules still apply to that traffic.
+        # Explicit subscription choices, including disabling sniffing, take priority.
+        config.setdefault("sniffer", {
+            "enable": True,
+            "parse-pure-ip": True,
+            "override-destination": True,
+            "sniff": {
+                "HTTP": {"ports": [80, "8080-8880"]},
+                "TLS": {"ports": [443, 8443]},
+                "QUIC": {"ports": [443, 8443]},
+            },
+        })
     if isinstance(dns, dict):
         dns.pop("listen", None)
     profile = config.setdefault("profile", {})

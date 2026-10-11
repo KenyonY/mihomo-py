@@ -8,7 +8,7 @@ import pytest
 
 @pytest.mark.integration
 def test_tun_in_isolated_network_namespace():
-    for tool in ("ip", "unshare", "nsenter", "setpriv"):
+    for tool in ("ip", "unshare", "nsenter", "setpriv", "openssl"):
         if not shutil.which(tool):
             pytest.skip(f"isolated TUN test requires {tool}")
     if not Path("/dev/net/tun").exists():
@@ -23,7 +23,7 @@ def test_tun_in_isolated_network_namespace():
         ["unshare", "--user", "--map-root-user", "--net", sys.executable, str(helper)],
         capture_output=True,
         text=True,
-        timeout=90,
+        timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "cleanup passed" in result.stdout

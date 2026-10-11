@@ -166,6 +166,11 @@ def owns_device(record):
                 continue
             if re.search(r"^iff:\s*" + re.escape(device) + r"\s*$", info, re.M):
                 return True
+    except PermissionError as exc:
+        raise AppError(
+            "tun_inspection_denied", "无权限确认内核持有的 TUN 设备。", 4,
+            "使用 mihomo-py --sudo tun status 检查实际状态。",
+        ) from exc
     except OSError:
         pass
     return False
@@ -187,7 +192,7 @@ def preflight(value, record=None):
             "tun_permission_denied",
             "缺少 TUN 访问权限或 CAP_NET_ADMIN。",
             4,
-            "由管理员在具备 CAP_NET_ADMIN 且可访问 /dev/net/tun 的环境中运行。",
+            "使用 mihomo-py --sudo 启动，或由管理员授予 CAP_NET_ADMIN 和 TUN 设备访问权限。",
         )
     net = network()
     owned = owns_device(record)

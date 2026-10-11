@@ -73,6 +73,23 @@ dns:
     assert yaml.safe_load(render('proxies: []', settings(), 's'))['dns']['enable']
 
 
+@pytest.mark.parametrize('sniffer', [None, {'enable': False},
+                                   {'enable': True, 'skip-domain': ['+.internal']}])
+def test_tun_sniffer_defaults_preserve_explicit_subscription_choices(sniffer):
+    source = {'proxies': []}
+    if sniffer is not None:
+        source['sniffer'] = sniffer
+    rendered = yaml.safe_load(render(yaml.safe_dump(source), settings(), 's'))
+    if sniffer is None:
+        assert rendered['sniffer']['enable']
+        assert rendered['sniffer']['parse-pure-ip']
+        assert rendered['sniffer']['override-destination']
+        assert set(rendered['sniffer']['sniff']) == {'HTTP', 'TLS', 'QUIC'}
+        assert 'sniffer' not in yaml.safe_load(render(yaml.safe_dump(source), settings(False), 's'))
+    else:
+        assert rendered['sniffer'] == sniffer
+
+
 @pytest.mark.parametrize('args', [
     ['tun', 'enable', '--dry-run'], ['tun', 'disable', '--dry-run'],
     ['tun', 'enable', '--device', 'test0', '--exclude-address', '10.2.3.4', '--dry-run'],
@@ -235,7 +252,10 @@ def test_owns_device_continues_after_descriptor_closes(monkeypatch):
 
 def test_owns_device_does_not_claim_unreadable_descriptors(monkeypatch):
     monkeypatch.setattr(Path, 'iterdir', Mock(side_effect=PermissionError()))
-    assert not tun.owns_device({'pid': 123, 'settings': settings()})
+    with pytest.raises(AppError) as error:
+        tun.owns_device({'pid': 123, 'settings': settings()})
+    assert error.value.kind == 'tun_inspection_denied'
+    assert '--sudo tun status' in error.value.suggestion
 
 
 @pytest.mark.parametrize('family', ['-4', '-6'])

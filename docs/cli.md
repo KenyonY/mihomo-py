@@ -38,6 +38,7 @@ zsh 使用 `read -rs 'SUB_URL?订阅 URL: '`。也可直接传入 URL：
 | `--timeout SECONDS` | 内核校验及启动就绪超时，默认 20 秒，范围 1–120 |
 | `--format json` / `--json` | 显式使用 JSON 输出 |
 | `--format table` | 显式使用表格或文本输出 |
+| `--sudo` | 通过 sudo 为本次运行获取 TUN 权限，保持原用户和数据目录 |
 | `--version` | 查看版本 |
 
 ## 命令
@@ -176,13 +177,13 @@ mihomo-py tun enable --yes --clear-excludes
 
 本机设置新增 `tun: {enabled: false, device: mihomo, stack: mips, exclude_address: []}` 和 `no_proxy`。旧状态和进程记录读取时自动补全；TUN 默认关闭。设备名为 1–15 个字母、数字、点、下划线或连字符；协议栈可选 `mips/system/gvisor/mixed`。IP/CIDR 排除地址会标准化，适合绕过管理连接或内网服务。排除不会自动识别或保证 SSH 连接不中断，请保留独立的恢复通道。
 
-TUN 需要 Linux、iproute2、有效的 CAP_NET_ADMIN 及 `/dev/net/tun` 读写权限；受限容器中的 root 不一定具有这些权限。客户端不执行 sudo/pkexec、不设置文件 capabilities，不提供自动权限安装。管理员须确保启动的内核实际继承所需权限。包内内核已锁定到支持 mips 的 v1.19.32；自定义内核由真实配置校验确认兼容性。
+TUN 需要 Linux、iproute2、有效的 CAP_NET_ADMIN 及 `/dev/net/tun` 读写权限；受限容器中的 root 不一定具有这些权限。使用 `mihomo-py --sudo` 启动 TUI，由 sudo 在终端提示密码；也可执行 `mihomo-py --sudo tun doctor` 或 `mihomo-py --sudo core restart`。需要系统安装 sudo 和 capsh（Debian/Ubuntu 包名为 libcap2-bin）。程序授权后保留原用户、数据目录、工作目录和 Python 环境，并向子进程传递 CAP_NET_ADMIN，不设置文件 capabilities，不保存密码。权限持续到进程退出，退出 TUI 不会停止后台内核。每次需要权限时显式传入 `--sudo`；帮助和 `--dry-run` 不请求权限。无交互 stdin 时使用 sudo 非交互模式，认证不可用会直接失败，程序不读取管道中的密码。sudo 认证错误沿用 sudo 的错误输出和退出码。环境继承受 sudo 策略控制，管理员须允许该授权命令。包内内核已锁定到支持 mips 的 v1.19.32；自定义内核由真实配置校验确认兼容性。
 
 启用前检查设备和路由占用、真实配置校验。交互 CLI 和 TUI 显示网络风险确认；非交互 CLI 必须 `--yes`。内核停止时只保存设置，下一次 `core start` 才创建 TUN。运行时先校验再重启，启动失败尝试恢复旧实例；TUN 失败不会自动降级。启用可能影响 SSH 和已有连接；代理不可用时本机网络可能中断。
 
-生成的配置固定 `auto-route: true`、`auto-detect-interface: true`、`auto-redirect: false`、TCP/UDP `any:53` DNS 劫持。保留订阅的解析器、fallback、fake-ip 设置并强制启用 DNS，始终移除 DNS listen。无自定义解析器时沿用内核默认解析器。继续提供 HTTP/SOCKS 混合端口。订阅不能指定其他入站、TUN 接管或防火墙策略。
+生成的配置固定 `auto-route: true`、`auto-detect-interface: true`、`auto-redirect: false`、TCP/UDP `any:53` DNS 劫持。保留订阅的解析器、fallback、fake-ip 设置并强制启用 DNS，始终移除 DNS listen。无自定义解析器时沿用内核默认解析器。订阅未配置 `sniffer` 时，TUN 默认启用 HTTP（80、8080–8880）、TLS/QUIC（443、8443）域名嗅探，并用域名替换目标地址。这样 DNS 经过本地 stub 或其他 VPN、未进入 TUN 时，仍可按域名分流。显式订阅嗅探配置保持不变。其他协议、端口及加密隐藏的域名不保证恢复。继续提供 HTTP/SOCKS 混合端口。订阅不能指定其他入站、TUN 接管或防火墙策略。
 
-`config show` 同时提供保存的 `tun` 设置和 `tun_status`；`core status` 提供 `tun` 状态。`configured` 表示保存的开关，`active` 要求受本实例进程持有且已启用的设备、健康内核，以及完整的 IPv4 路由和策略规则；启动时存在 IPv6 路由的实例也要求 IPv6 规则完整。`ipv4/ipv6` 分别报告完整性。规则丢失后，`core start` 会重建实例。`running_device/running_stack` 表示运行中的参数，`restart_required` 提示保存与运行状态不一致。`active` 不证明所有目标都可访问。IPv6 取决于订阅的顶层 `ipv6`、宿主网络和实际生成的路由；关闭 IPv6 时不会宣称已接管 IPv6。发往 `127.0.0.53` 等本地 DNS stub 的请求不直接进入 TUN；其上游请求只有经过 TUN 路由且未排除时才会被劫持。DoH/DoT 不属于 53 端口 DNS 劫持范围。
+`config show` 同时提供保存的 `tun` 设置和 `tun_status`；`core status` 提供 `tun` 状态。`configured` 表示保存的开关，`active` 要求受本实例进程持有且已启用的设备、健康内核，以及完整的 IPv4 路由和策略规则；启动时存在 IPv6 路由的实例也要求 IPv6 规则完整。`ipv4/ipv6` 分别报告完整性。规则丢失后，`core start` 会重建实例。`running_device/running_stack` 表示运行中的参数，`restart_required` 提示保存与运行状态不一致。`active` 不证明所有目标都可访问。检查者无权限读取内核的设备描述符时，`inspection_error` 返回 `tun_inspection_denied`；此时 `active: false` 表示无法确认，应使用 `mihomo-py --sudo tun status` 复查。IPv6 取决于订阅的顶层 `ipv6`、宿主网络和实际生成的路由；关闭 IPv6 时不会宣称已接管 IPv6。发往 `127.0.0.53` 等本地 DNS stub 的请求不直接进入 TUN；其上游请求只有经过 TUN 路由且未排除时才会被劫持。DoH/DoT 不属于 53 端口 DNS 劫持范围。
 
 首期同一网络命名空间共用保留路由表 2022 和规则优先级 9000–9020。即使设备名不同，已有 TUN 或外部规则占用这些资源也会明确拒绝；需要并行 TUN 实例时使用独立网络命名空间。不会删除其他实例的设备或规则。普通 HTTP/SOCKS 实例仍可使用不同目录和端口并行运行。
 
