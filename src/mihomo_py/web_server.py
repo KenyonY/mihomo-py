@@ -35,7 +35,7 @@ def create_app(manager, *, host=None, port=None):
     if root is None:
         raise AppError("web_missing", "尚未安装 Web 资源。", 3, "pip install 'mihomo-py[web]'。")
     portal = root.parent / "portal"
-    credential_key = web.RequestKey("credential", str)
+    credential_key = "mihomo_py.credential"
     data = manager.store.root / "web-data"
     with manager.store.lock():
         manager.engine.controller_secret()
