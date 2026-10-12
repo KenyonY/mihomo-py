@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -27,6 +28,15 @@ from .store import (
     upgrade_settings,
     valid_settings,
 )
+
+
+def reap_process(process):
+    """Reap a detached child without tying its lifetime to the CLI/TUI process."""
+    threading.Thread(
+        target=process.wait,
+        name=f"mihomo-py-reaper-{process.pid}",
+        daemon=True,
+    ).start()
 
 
 def fingerprint(content, settings):
@@ -250,7 +260,9 @@ class Engine:
     def stop(self):
         record = self.running()
         if not record:
-            tun.check_cleanup(self.record())
+            stale = self.record()
+            tun.cleanup(stale)
+            self.record_path.unlink(missing_ok=True)
             return False
         self.require_process_api()
         try:
@@ -278,7 +290,7 @@ class Engine:
             pass
         finally:
             os.close(fd)
-        tun.check_cleanup(record)
+        tun.cleanup(record)
         self.record_path.unlink(missing_ok=True)
         return True
 
@@ -385,12 +397,15 @@ class Engine:
                 if child.poll() is not None:
                     break
                 net = tun.network() if tun_enabled else None
+                if tun_enabled:
+                    snapshot = tun.resources(net)
+                    if record.get("tun_resources") != snapshot:
+                        record["tun_resources"] = snapshot
+                        atomic_write(self.record_path, json.dumps(record))
                 if self.healthy(record) and (
                     not tun_enabled or tun.observation(record, net)["active"]
                 ):
-                    if tun_enabled:
-                        record["tun_resources"] = tun.resources(net)
-                        atomic_write(self.record_path, json.dumps(record))
+                    reap_process(child)
                     return record
                 time.sleep(0.1)
             raise AppError(
@@ -406,7 +421,7 @@ class Engine:
             except subprocess.TimeoutExpired:
                 child.kill()
                 child.wait()
-            tun.check_cleanup(record)
+            tun.cleanup(record)
             self.record_path.unlink(missing_ok=True)
             if tun_enabled and isinstance(failure, AppError) and failure.kind == "start_failed":
                 raise AppError("tun_start_failed", "TUN 内核未就绪。", 1,

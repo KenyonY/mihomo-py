@@ -19,7 +19,7 @@ import yaml
 from . import pidfd, tun
 from .bundle import dashboard_root
 from .config import check_name, fetch, normalize_source, parse, source_label
-from .engine import Engine, fingerprint, process_identity
+from .engine import Engine, fingerprint, process_identity, reap_process
 from .errors import AppError, Message
 from .geodata import snapshot_geodata
 from .store import Store, atomic_write, controller_address, valid_host, valid_settings
@@ -234,6 +234,7 @@ class Manager:
                 try:
                     with opener.open(request, timeout=0.5) as response:
                         if response.status == 200:
+                            reap_process(child)
                             return self.web()
                 except (OSError, urllib.error.URLError):
                     pass

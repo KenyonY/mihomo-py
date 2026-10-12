@@ -180,16 +180,13 @@ def main():
                     manager.configure_tun(True)
                     raise AssertionError("unclean replacement accepted")
                 except AppError as error:
-                    assert error.kind == "rollback_failed", error.kind
-            assert killed and not manager.engine.running()
+                    assert error.kind == "tun_start_failed", error.kind
+            assert killed and manager.engine.running()
             assert not manager.store.read()["settings"]["tun"]["enabled"]
-            assert manager.engine.record()["settings"]["tun"]["enabled"]
-            assert manager.engine.record()["pid"] == killed[0]
+            assert not manager.engine.record()["settings"]["tun"]["enabled"]
+            assert manager.engine.record()["pid"] != killed[0]
             remaining = tun.resources(tun.network())
-            assert remaining["rules"]
-            # All remaining rules belong to this test's isolated namespace.
-            for rule in remaining["rules"]:
-                ip(rule["family"], "rule", "del", "priority", str(rule["priority"]))
+            assert not any(remaining.values())
             manager.start()
             manager.configure_tun(True)
             assert manager.status()["pid"] != before["pid"]
@@ -255,7 +252,7 @@ def main():
             assert manager.tun_status()["active"]
             # Missing inspection tools must not kill a healthy core during disable.
             old_pid = manager.engine.running()["pid"]
-            with patch.dict(os.environ, {"PATH": "/nonexistent-iproute2"}):
+            with patch.object(tun, "ip_tool", side_effect=FileNotFoundError()):
                 try:
                     manager.configure_tun(False)
                     raise AssertionError("disable accepted without network inspection")
@@ -265,16 +262,16 @@ def main():
                 assert manager.engine.healthy(manager.engine.running())
             assert (manager.store.root / "state.json").read_bytes() == state_before
             # A cleanup inspection failure after exit must also enter rollback.
-            check_cleanup = tun.check_cleanup
+            cleanup = tun.cleanup
             failed_cleanup = []
 
             def cleanup_fails_once(record):
                 if not manager.engine.running() and not failed_cleanup:
                     failed_cleanup.append(True)
                     raise AppError("tun_cleanup_failed", "injected cleanup inspection failure")
-                return check_cleanup(record)
+                return cleanup(record)
 
-            with patch.object(tun, "check_cleanup", side_effect=cleanup_fails_once):
+            with patch.object(tun, "cleanup", side_effect=cleanup_fails_once):
                 try:
                     manager.configure_tun(False)
                     raise AssertionError("cleanup failure not propagated")
@@ -295,10 +292,10 @@ def main():
                 if save_failures and not manager.engine.running() and not cleanup_failures:
                     cleanup_failures.append(True)
                     raise AppError("tun_cleanup_failed", "injected inspection failure")
-                return check_cleanup(record)
+                return cleanup(record)
 
             with patch.object(manager.store, "save", side_effect=fail_save):
-                with patch.object(tun, "check_cleanup", side_effect=cleanup_after_save_failure):
+                with patch.object(tun, "cleanup", side_effect=cleanup_after_save_failure):
                     try:
                         manager.configure({"mode": "direct"})
                         raise AssertionError("save failure not propagated")
@@ -436,7 +433,7 @@ def main():
             manager.put_sub("b")
             for tls in (False, True):
                 sniffed_request(tls)
-            # SIGKILL leaves core-created policy rules; report and retain evidence.
+            # SIGKILL leaves core-created policy rules; recover the recorded snapshot.
             manager.start()
             record = manager.engine.running()
             descriptor = pidfd.open_pidfd(record["pid"])
@@ -445,17 +442,10 @@ def main():
             deadline = time.monotonic() + 5
             while manager.engine.running() and time.monotonic() < deadline:
                 time.sleep(0.02)
-            try:
-                manager.configure_tun(False)
-                raise AssertionError("unclean stop accepted")
-            except AppError as error:
-                assert error.kind == "tun_cleanup_failed", error.kind
-            assert manager.engine.record_path.exists()
-            assert manager.store.read()["settings"]["tun"]["enabled"]
-            # This test owns its entire isolated namespace; remove only its residual rules.
-            for rule in tun.resources(tun.network())["rules"]:
-                ip(rule["family"], "rule", "del", "priority", str(rule["priority"]))
             manager.configure_tun(False)
+            assert not manager.engine.record_path.exists()
+            assert not manager.store.read()["settings"]["tun"]["enabled"]
+            assert not any(tun.resources(tun.network()).values())
             print(
                 "TUN IPv4/IPv6 HTTP, UDP/TCP DNS, stub DNS, conflicts, permission, "
                 "rollback, lifecycle, exclusions and cleanup passed",

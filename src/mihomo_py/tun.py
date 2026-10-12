@@ -12,6 +12,7 @@ import re
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .errors import AppError
@@ -114,6 +115,7 @@ def permission():
 def network():
     result = {"links": [], "routes": [], "rules": []}
     try:
+        binary = ip_tool()
         commands = [("links", ["-details", "link", "show"])]
         for family in ("-4", "-6"):
             commands.extend(
@@ -124,7 +126,11 @@ def network():
             )
         for key, args in commands:
             output = subprocess.run(
-                ["ip", "-N", "-j", *args], capture_output=True, text=True, timeout=3, check=True
+                [binary, "-N", "-j", *args],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=True,
             )
             values = json.loads(output.stdout)
             if key != "links":
@@ -141,6 +147,15 @@ def network():
     return result
 
 
+def ip_tool():
+    """Resolve iproute2 without trusting a capability-bearing process's PATH."""
+    for directory in ("/usr/bin", "/bin", "/usr/sbin", "/sbin"):
+        path = Path(directory) / "ip"
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    raise FileNotFoundError("iproute2 executable not found")
+
+
 def resources(net):
     return {
         "routes": [r for r in net["routes"] if str(r.get("table")) == str(TABLE)],
@@ -150,6 +165,16 @@ def resources(net):
             if str(r.get("table")) == str(TABLE) or RULE_START <= r.get("priority", -1) <= RULE_END
         ],
     }
+
+
+def recorded_resource(item, expected):
+    # iproute2 annotates an input/output interface after that interface disappears.
+    stable = {
+        key: value
+        for key, value in item.items()
+        if key not in ("iif_detached", "oif_detached")
+    }
+    return stable in expected
 
 
 def owns_device(record):
@@ -250,16 +275,107 @@ def observation(record, net=None):
     return result
 
 
+def settled_network(record):
+    """Wait briefly for the kernel to unregister a TUN link after process exit."""
+    net = network()
+    device = record["settings"]["tun"]["device"]
+    deadline = time.monotonic() + 1
+    while any(x["ifname"] == device for x in net["links"]) and time.monotonic() < deadline:
+        time.sleep(0.05)
+        net = network()
+    return net
+
+
 def check_cleanup(record):
     if not record or not record["settings"].get("tun", DEFAULT_TUN)["enabled"]:
         return
     try:
-        net = network()
+        net = settled_network(record)
         device = record["settings"]["tun"]["device"]
         remaining = resources(net)
         if any(x["ifname"] == device for x in net["links"]) or any(remaining.values()):
             raise ValueError
     except (AppError, ValueError) as exc:
+        raise AppError(
+            "tun_cleanup_failed",
+            "无法确认 TUN 设备和路由已清理。",
+            1,
+            "运行 tun doctor 并由管理员检查残留；不要删除其他实例的设备或路由。",
+            True,
+        ) from exc
+
+
+def cleanup(record):
+    """Verify teardown and remove only residual resources recorded for this instance."""
+    if not record or not record["settings"].get("tun", DEFAULT_TUN)["enabled"]:
+        return
+    try:
+        net = settled_network(record)
+        device = record["settings"]["tun"]["device"]
+        remaining = resources(net)
+        if not any(x["ifname"] == device for x in net["links"]) and not any(
+            remaining.values()
+        ):
+            return
+
+        expected = record.get("tun_resources")
+        recoverable = (
+            not any(x["ifname"] == device for x in net["links"])
+            and isinstance(expected, dict)
+            and set(expected) == {"routes", "rules"}
+            and all(isinstance(expected[key], list) for key in expected)
+            and all(
+                recorded_resource(item, expected[key])
+                for key in remaining
+                for item in remaining[key]
+            )
+        )
+        if not recoverable:
+            raise ValueError("residual resources do not match the recorded snapshot")
+        if not permission()["cap_net_admin"]:
+            raise PermissionError("CAP_NET_ADMIN is required for residual cleanup")
+
+        binary = ip_tool()
+        operation_error = None
+        for rule in remaining["rules"]:
+            family, priority = rule.get("family"), rule.get("priority")
+            if family not in ("-4", "-6") or type(priority) is not int:
+                raise ValueError("unrecognized policy rule")
+            try:
+                subprocess.run(
+                    [binary, family, "rule", "del", "priority", str(priority)],
+                    capture_output=True,
+                    timeout=3,
+                    check=True,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                # Kernel/core teardown can win this race; final inspection decides success.
+                operation_error = operation_error or exc
+        for family in ("-4", "-6"):
+            if any(route.get("family") == family for route in remaining["routes"]):
+                try:
+                    subprocess.run(
+                        [binary, family, "route", "flush", "table", str(TABLE)],
+                        capture_output=True,
+                        timeout=3,
+                        check=True,
+                    )
+                except (OSError, subprocess.SubprocessError) as exc:
+                    operation_error = operation_error or exc
+        try:
+            check_cleanup(record)
+        except AppError as exc:
+            raise operation_error or exc
+    except PermissionError as exc:
+        raise AppError(
+            "tun_cleanup_permission_denied",
+            "异常退出后需要 CAP_NET_ADMIN 清理本实例残留的 TUN 路由。",
+            4,
+            "使用 mihomo-py --sudo core stop 清理后重试。",
+        ) from exc
+    except (AppError, OSError, subprocess.SubprocessError, ValueError) as exc:
+        if isinstance(exc, AppError) and exc.kind == "tun_cleanup_permission_denied":
+            raise
         raise AppError(
             "tun_cleanup_failed",
             "无法确认 TUN 设备和路由已清理。",

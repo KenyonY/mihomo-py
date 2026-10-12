@@ -156,6 +156,75 @@ def test_device_alone_is_not_active_and_cleanup_is_checked(monkeypatch):
     tun.check_cleanup(record)
 
 
+def test_cleanup_removes_only_recorded_residual_resources(monkeypatch):
+    net = {
+        'links': [],
+        'routes': [
+            {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default'},
+            {'family': '-6', 'table': '2022', 'dev': 'mihomo', 'dst': 'default'},
+        ],
+        'rules': [
+            {'family': '-4', 'priority': 9002, 'table': '2022'},
+            {'family': '-6', 'priority': 9010, 'nop': None},
+        ],
+    }
+    record = {
+        'pid': 123,
+        'settings': settings(),
+        'tun_resources': copy.deepcopy(tun.resources(net)),
+    }
+    # The kernel annotates rules that reference the now-removed TUN interface.
+    net['rules'][0]['iif_detached'] = None
+    calls = []
+    monkeypatch.setattr(tun, 'network', lambda: copy.deepcopy(net))
+    monkeypatch.setattr(tun, 'permission', lambda: {'cap_net_admin': True})
+    monkeypatch.setattr(tun, 'ip_tool', lambda: '/usr/sbin/ip')
+
+    def run(command, **kwargs):
+        calls.append(command)
+        family = command[1]
+        if command[2:4] == ['rule', 'del']:
+            priority = int(command[-1])
+            net['rules'][:] = [
+                rule for rule in net['rules']
+                if not (rule['family'] == family and rule['priority'] == priority)
+            ]
+        else:
+            net['routes'][:] = [route for route in net['routes'] if route['family'] != family]
+        return Mock(returncode=0)
+
+    monkeypatch.setattr(tun.subprocess, 'run', run)
+    tun.cleanup(record)
+    assert calls == [
+        ['/usr/sbin/ip', '-4', 'rule', 'del', 'priority', '9002'],
+        ['/usr/sbin/ip', '-6', 'rule', 'del', 'priority', '9010'],
+        ['/usr/sbin/ip', '-4', 'route', 'flush', 'table', '2022'],
+        ['/usr/sbin/ip', '-6', 'route', 'flush', 'table', '2022'],
+    ]
+
+
+def test_cleanup_rejects_unrecorded_or_unprivileged_resources(monkeypatch):
+    net = {
+        'links': [], 'routes': [],
+        'rules': [{'family': '-4', 'priority': 9002, 'table': '2022'}],
+    }
+    record = {'pid': 123, 'settings': settings(), 'tun_resources': {'routes': [], 'rules': []}}
+    run = Mock()
+    monkeypatch.setattr(tun, 'network', lambda: net)
+    monkeypatch.setattr(tun.subprocess, 'run', run)
+    with pytest.raises(AppError) as error:
+        tun.cleanup(record)
+    assert error.value.kind == 'tun_cleanup_failed'
+    run.assert_not_called()
+
+    record['tun_resources'] = copy.deepcopy(tun.resources(net))
+    monkeypatch.setattr(tun, 'permission', lambda: {'cap_net_admin': False})
+    with pytest.raises(AppError) as error:
+        tun.cleanup(record)
+    assert error.value.kind == 'tun_cleanup_permission_denied' and error.value.code == 4
+    run.assert_not_called()
+
+
 def test_enable_stopped_prechecks_validates_then_saves(tmp_path, monkeypatch):
     manager = Manager(tmp_path)
     state = manager.store.read()

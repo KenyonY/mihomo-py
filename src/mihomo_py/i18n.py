@@ -321,6 +321,8 @@ BACKEND_MESSAGES = {
     "TUN 路由表或策略路由规则已被占用。": "The TUN routing table or policy rules are already in use.",
     "停止使用路由表 2022 或规则优先级 9000–9020 的实例后重试。": "Stop the instance using table 2022 or rule priorities 9000–9020, then retry.",
     "无法确认 TUN 设备和路由已清理。": "Cannot confirm TUN device and route cleanup.",
+    "异常退出后需要 CAP_NET_ADMIN 清理本实例残留的 TUN 路由。": "CAP_NET_ADMIN is required to remove this instance's residual TUN routes after an abnormal exit.",
+    "使用 mihomo-py --sudo core stop 清理后重试。": "Run mihomo-py --sudo core stop to clean up, then retry.",
     "运行 tun doctor 并由管理员检查残留；不要删除其他实例的设备或路由。": "Run tun doctor and have an administrator inspect residual resources; do not remove another instance's devices or routes.",
     "另一个实例正在修改内核或网络。": "Another instance is changing the core or network.",
     "稍后重试。": "Try again shortly.",

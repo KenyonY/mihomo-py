@@ -71,6 +71,8 @@ def _fetch_once(source):
             with Path(source).open("rb") as stream:
                 data = stream.read(MAX_BYTES + 1)
     except urllib.error.HTTPError as exc:
+        # HTTPError is also a live response object; close its socket before translating it.
+        exc.close()
         raise AppError(
             "download_failed",
             Message("订阅下载失败（HTTP {status}）。", status=exc.code),
