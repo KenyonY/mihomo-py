@@ -252,7 +252,10 @@ def test_cleanup_rejects_unrecorded_or_unprivileged_resources(monkeypatch):
 
 
 def test_cleanup_preserves_resource_added_during_recovery(monkeypatch):
-    owned = {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default'}
+    owned = {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default',
+        'gateway': '198.18.0.2', 'flags': [],
+    }
     foreign = {'family': '-4', 'table': '2022', 'dev': 'foreign0', 'dst': '10.0.0.0/8'}
     net = {'links': [], 'routes': [owned], 'rules': []}
     record = {
@@ -267,7 +270,7 @@ def test_cleanup_preserves_resource_added_during_recovery(monkeypatch):
     def run(command, **kwargs):
         assert command == [
             '/usr/sbin/ip', '-4', 'route', 'del', 'default', 'table', '2022',
-            'dev', 'mihomo',
+            'via', '198.18.0.2', 'dev', 'mihomo',
         ]
         net['routes'].remove(owned)
         net['routes'].append(foreign)
@@ -282,11 +285,14 @@ def test_cleanup_preserves_resource_added_during_recovery(monkeypatch):
 
 def test_startup_snapshot_never_claims_foreign_resources():
     record = tun_record()
-    owned = {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default'}
+    owned = {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default',
+        'gateway': '198.18.0.2', 'flags': [],
+    }
     foreign = {'family': '-4', 'table': '2022', 'dev': 'foreign0', 'dst': '10.0.0.0/8'}
     owned_rule = {
-        'family': '-4', 'priority': 9000, 'dst': '198.18.0.0', 'dstlen': 30,
-        'table': '2022',
+        'family': '-4', 'priority': 9000, 'src': 'all', 'dst': '198.18.0.0',
+        'dstlen': 30, 'table': '2022',
     }
     foreign_rule = {'family': '-4', 'priority': 9005, 'table': 'main', 'src': 'all'}
     net = {
@@ -301,6 +307,29 @@ def test_startup_snapshot_never_claims_foreign_resources():
     with pytest.raises(AppError) as error:
         tun.require_owned_snapshot(record, net, {'routes': [], 'rules': []})
     assert error.value.kind == 'tun_route_conflict'
+
+
+@pytest.mark.parametrize('resource', [
+    {
+        'family': '-4', 'priority': 9005, 'src': 'all', 'dst': '198.18.0.1',
+        'dstlen': 32, 'table': '2022',
+    },
+    {
+        'family': '-4', 'priority': 9000, 'src': 'all', 'dst': '198.18.0.0',
+        'dstlen': 30, 'table': '2022', 'fwmark': '0x1',
+    },
+    {'family': '-4', 'priority': 9010, 'nop': None, 'fwmark': '0x1'},
+])
+def test_near_mihomo_foreign_rules_are_not_owned(resource):
+    assert not tun.owned_rule(resource)
+
+
+@pytest.mark.parametrize('route', [
+    {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': '10.0.0.0/8'},
+    {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default', 'metric': 5},
+])
+def test_same_device_foreign_routes_are_not_owned(route):
+    assert not tun.owned_route(route, 'mihomo')
 
 
 def tun_record():
@@ -408,7 +437,10 @@ def test_launch_captures_resources_created_just_before_exit(tmp_path, monkeypatc
     child = Mock(pid=123)
     child.poll.side_effect = [None, None, 1]
     child.wait.return_value = 1
-    residual = {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default'}
+    residual = {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default',
+        'gateway': '198.18.0.2', 'flags': [],
+    }
     final_net = {'links': [], 'routes': [residual], 'rules': []}
     data_dir = mock_tun_launch(engine, tmp_path, monkeypatch, child, final_net)
     cleanup = Mock()
@@ -429,7 +461,10 @@ def test_tun_log_close_failure_preserves_cleanup_evidence(tmp_path, monkeypatch)
     child = Mock(pid=123)
     child.poll.return_value = None
     child.wait.return_value = 1
-    residual = {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default'}
+    residual = {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default',
+        'gateway': '198.18.0.2', 'flags': [],
+    }
     final_net = {'links': [], 'routes': [residual], 'rules': []}
     data_dir = mock_tun_launch(engine, tmp_path, monkeypatch, child, final_net)
     cleanup = Mock(side_effect=AppError('tun_cleanup_failed', 'injected'))
@@ -456,7 +491,42 @@ def test_tun_log_close_failure_preserves_cleanup_evidence(tmp_path, monkeypatch)
     assert saved['tun_resources'] == {'routes': [residual], 'rules': []}
 
 
-def test_invalid_tun_snapshot_is_structured_state_error(tmp_path):
+def test_exit_before_identity_preserves_cleanup_evidence(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    child = Mock(pid=123)
+    child.poll.return_value = 1
+    child.wait.return_value = 1
+    residual = {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default',
+        'gateway': '198.18.0.2', 'flags': [],
+    }
+    final_net = {'links': [], 'routes': [residual], 'rules': []}
+    data_dir = mock_tun_launch(engine, tmp_path, monkeypatch, child, final_net)
+    monkeypatch.setattr('mihomo_py.engine.process_identity', lambda pid: None)
+    monkeypatch.setattr(
+        tun, 'cleanup', Mock(side_effect=AppError('tun_cleanup_failed', 'injected'))
+    )
+
+    with pytest.raises(AppError) as error:
+        engine.launch(
+            'proxies: []', 'a', settings(), 'digest', 'secret', data_directory=data_dir
+        )
+    assert error.value.kind == 'tun_cleanup_failed'
+    saved = engine.record()
+    assert saved['state'] == 'starting' and saved['identity'] is None
+    assert saved['pid'] == 123
+    assert saved['tun_resources'] == {'routes': [residual], 'rules': []}
+
+
+@pytest.mark.parametrize('snapshot', [
+    {'routes': [], 'rules': [1]},
+    {'routes': [], 'rules': [{}]},
+    {'routes': [], 'rules': [{'family': 'bad', 'priority': 9000}]},
+    {'routes': [], 'rules': [{'family': '-4', 'priority': '9000'}]},
+    {'routes': [{'family': '-4', 'table': [], 'dst': 'default', 'dev': 'mihomo'}],
+     'rules': []},
+])
+def test_invalid_tun_snapshot_is_structured_state_error(tmp_path, snapshot):
     engine = Engine(tmp_path)
     record = {
         'pid': 123,
@@ -466,7 +536,7 @@ def test_invalid_tun_snapshot_is_structured_state_error(tmp_path):
         'fingerprint': 'digest',
         'secret': 'secret',
         'settings': settings(),
-        'tun_resources': {'routes': [], 'rules': [1]},
+        'tun_resources': snapshot,
     }
     engine.record_path.write_text(json.dumps(record))
     with pytest.raises(AppError) as error:

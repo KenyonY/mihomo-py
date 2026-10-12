@@ -185,7 +185,7 @@ TUN 需要 Linux、iproute2、有效的 CAP_NET_ADMIN 及 `/dev/net/tun` 读写�
 
 `config show` 同时提供保存的 `tun` 设置和 `tun_status`；`core status` 提供 `tun` 状态。`configured` 表示保存的开关，`active` 要求受本实例进程持有且已启用的设备、健康内核，以及完整的 IPv4 路由和策略规则；启动时存在 IPv6 路由的实例也要求 IPv6 规则完整。`ipv4/ipv6` 分别报告完整性。规则丢失后，`core start` 会重建实例。`running_device/running_stack` 表示运行中的参数，`restart_required` 提示保存与运行状态不一致。`active` 不证明所有目标都可访问。检查者无权限读取内核的设备描述符时，`inspection_error` 返回 `tun_inspection_denied`；此时 `active: false` 表示无法确认，应使用 `mihomo-py --sudo tun status` 复查。IPv6 取决于订阅的顶层 `ipv6`、宿主网络和实际生成的路由；关闭 IPv6 时不会宣称已接管 IPv6。发往 `127.0.0.53` 等本地 DNS stub 的请求不直接进入 TUN；其上游请求只有经过 TUN 路由且未排除时才会被劫持。DoH/DoT 不属于 53 端口 DNS 劫持范围。
 
-首期同一网络命名空间共用保留路由表 2022 和规则优先级 9000–9020。即使设备名不同，已有 TUN 或外部规则占用这些资源也会明确拒绝；需要并行 TUN 实例时使用独立网络命名空间。不会删除其他实例的设备或规则。普通 HTTP/SOCKS 实例仍可使用不同目录和端口并行运行。
+首期同一网络命名空间共用保留路由表 2022 和规则优先级 9000–9020。即使设备名不同，已有 TUN 或外部规则占用这些资源也会明确拒绝；需要并行 TUN 实例时使用独立网络命名空间。程序只精确删除严格匹配本实例快照和 mihomo 路由结构的资源；该隔离依赖其他特权程序不在清理瞬间创建完全相同的规则。普通 HTTP/SOCKS 实例仍可使用不同目录和端口并行运行。
 
 `tun doctor` 检查权限、设备/路由冲突，并在临时目录执行真实内核配置校验，不启动 TUN、不修改当前实例。诊断复制当前订阅的 GEO 缓存和实例的 GEO 覆盖文件，支持已有自定义 GEO 缓存的离线校验；本地 provider 文件须在校验环境中可用。输出 `ok/checks/status/proposed`，检查失败退出码 1。`--device/--stack/--exclude-address/--clear-excludes` 可检查候选设置。`tun enable/disable --dry-run` 只输出 JSON 操作意图，退出码 10，不创建目录或启动进程。
 

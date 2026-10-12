@@ -227,31 +227,37 @@ class Engine:
                 upgrade_settings(record["settings"])
             if type(record["pid"]) is not int or record["pid"] <= 1:
                 raise ValueError
+            state = record.get("state", "running")
             identity = record["identity"]
             tun_resources = record.get("tun_resources")
-            if not (
+            valid_identity = (
                 isinstance(identity, dict)
                 and all(isinstance(identity[key], str) for key in ("start_ticks", "boot_id"))
                 and isinstance(identity["cmdline"], list)
                 and all(isinstance(value, str) for value in identity["cmdline"])
+            )
+            valid_snapshot = (
+                tun_resources is None
+                or (
+                    isinstance(tun_resources, dict)
+                    and set(tun_resources) == {"routes", "rules"}
+                    and all(isinstance(tun_resources[key], list) for key in tun_resources)
+                    and all(
+                        tun.valid_resource(key, item)
+                        for key in tun_resources
+                        for item in tun_resources[key]
+                    )
+                )
+            )
+            if not (
+                state in ("starting", "running")
+                and (valid_identity or state == "starting" and identity is None)
                 and all(
                     isinstance(record[key], str)
                     for key in ("data_dir", "subscription", "fingerprint", "secret")
                 )
                 and valid_settings(record["settings"])
-                and (
-                    tun_resources is None
-                    or (
-                        isinstance(tun_resources, dict)
-                        and set(tun_resources) == {"routes", "rules"}
-                        and all(isinstance(tun_resources[key], list) for key in tun_resources)
-                        and all(
-                            isinstance(item, dict)
-                            for key in tun_resources
-                            for item in tun_resources[key]
-                        )
-                    )
-                )
+                and valid_snapshot
             ):
                 raise ValueError
             return record
@@ -264,7 +270,7 @@ class Engine:
         record = self.record()
         # Do not trust a PID alone, even if it now points at another mihomo instance.
         expected = record["identity"] if record else None
-        if record and identity_matches(
+        if record and record.get("state", "running") == "running" and identity_matches(
             process_identity(record["pid"]), expected, record["data_dir"], self.runtime_path
         ):
             return record
@@ -381,6 +387,7 @@ class Engine:
         record = {
             "pid": None,
             "identity": None,
+            "state": "starting",
             "data_dir": data_dir,
             "subscription": name,
             "settings": settings,
@@ -405,6 +412,9 @@ class Engine:
                 start_new_session=True,
             )
             record["pid"] = child.pid
+            if tun_enabled:
+                record["tun_resources"] = {"routes": [], "rules": []}
+            atomic_write(self.record_path, json.dumps(record))
             deadline = time.monotonic() + self.timeout
             # /proc may briefly expose an empty cmdline immediately after exec.
             # Persist only a complete identity, or later stop/status cannot recognize it.
@@ -412,6 +422,8 @@ class Engine:
                 identity = process_identity(child.pid)
                 if identity and command_matches(identity["cmdline"], command):
                     record["identity"] = identity
+                    record["state"] = "running"
+                    atomic_write(self.record_path, json.dumps(record))
                     break
                 time.sleep(0.01)
             if record["identity"] is None:
@@ -420,9 +432,6 @@ class Engine:
                     "内核退出或未能确认启动身份。",
                     suggestion="运行 core logs 查看日志。",
                 )
-            if tun_enabled:
-                record["tun_resources"] = {"routes": [], "rules": []}
-            atomic_write(self.record_path, json.dumps(record))
             os.close(log_fd)
             log_fd = None
             while time.monotonic() < deadline:
@@ -459,7 +468,7 @@ class Engine:
             except subprocess.TimeoutExpired:
                 child.kill()
                 child.wait()
-            if tun_enabled and record["identity"] is not None:
+            if tun_enabled:
                 save_tun_resources(tun.settled_network(record))
             tun.cleanup(record)
             self.record_path.unlink(missing_ok=True)
