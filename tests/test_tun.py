@@ -280,6 +280,29 @@ def test_cleanup_preserves_resource_added_during_recovery(monkeypatch):
     assert net['routes'] == [foreign]
 
 
+def test_startup_snapshot_never_claims_foreign_resources():
+    record = tun_record()
+    owned = {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default'}
+    foreign = {'family': '-4', 'table': '2022', 'dev': 'foreign0', 'dst': '10.0.0.0/8'}
+    owned_rule = {
+        'family': '-4', 'priority': 9000, 'dst': '198.18.0.0', 'dstlen': 30,
+        'table': '2022',
+    }
+    foreign_rule = {'family': '-4', 'priority': 9005, 'table': 'main', 'src': 'all'}
+    net = {
+        'links': [],
+        'routes': [owned, foreign],
+        'rules': [owned_rule, foreign_rule],
+    }
+
+    snapshot, clean = tun.owned_snapshot(record, net, {'routes': [], 'rules': []})
+    assert snapshot == {'routes': [owned], 'rules': [owned_rule]}
+    assert clean is False
+    with pytest.raises(AppError) as error:
+        tun.require_owned_snapshot(record, net, {'routes': [], 'rules': []})
+    assert error.value.kind == 'tun_route_conflict'
+
+
 def tun_record():
     return {
         'pid': 123,
@@ -332,9 +355,16 @@ def test_stop_recovers_if_identity_disappears_after_pidfd_open(tmp_path, monkeyp
 def test_launch_reaps_child_if_log_close_fails(tmp_path, monkeypatch):
     engine = Engine(tmp_path)
     child = Mock(pid=123)
+    child.poll.return_value = None
     child.wait.return_value = 0
+    data_dir = str(tmp_path / 'data')
+    command = ['/core', '-d', data_dir, '-f', str(engine.runtime_path)]
     monkeypatch.setattr(engine, 'check_ports', lambda settings: None)
     monkeypatch.setattr(engine, 'executable', lambda: '/core')
+    monkeypatch.setattr(
+        'mihomo_py.engine.process_identity',
+        lambda pid: {'start_ticks': '1', 'boot_id': 'boot', 'cmdline': command},
+    )
     monkeypatch.setattr('mihomo_py.engine.subprocess.Popen', lambda *args, **kwargs: child)
     real_close = os.close
     close_calls = 0
@@ -348,10 +378,100 @@ def test_launch_reaps_child_if_log_close_fails(tmp_path, monkeypatch):
 
     monkeypatch.setattr('mihomo_py.engine.os.close', close)
     with pytest.raises(OSError, match='injected'):
-        engine.launch('proxies: []', 'a', settings(False), 'digest', 'secret')
+        engine.launch(
+            'proxies: []', 'a', settings(False), 'digest', 'secret', data_directory=data_dir
+        )
     child.terminate.assert_called_once_with()
     child.wait.assert_called_once_with(timeout=5)
     assert not engine.record_path.exists()
+
+
+def mock_tun_launch(engine, tmp_path, monkeypatch, child, final_net):
+    data_dir = str(tmp_path / 'data')
+    command = ['/core', '-d', data_dir, '-f', str(engine.runtime_path)]
+    identity = {'start_ticks': '1', 'boot_id': 'boot', 'cmdline': command}
+    empty = {'links': [], 'routes': [], 'rules': []}
+    monkeypatch.setattr(engine, 'check_ports', lambda settings: None)
+    monkeypatch.setattr(engine, 'executable', lambda: '/core')
+    monkeypatch.setattr('mihomo_py.engine.process_identity', lambda pid: identity)
+    monkeypatch.setattr('mihomo_py.engine.subprocess.Popen', lambda *args, **kwargs: child)
+    monkeypatch.setattr(tun, 'preflight', lambda value: empty)
+    monkeypatch.setattr(tun, 'network', lambda: empty)
+    monkeypatch.setattr(tun, 'settled_network', lambda record: final_net)
+    monkeypatch.setattr(engine, 'healthy', lambda record: False)
+    monkeypatch.setattr('mihomo_py.engine.time.sleep', lambda seconds: None)
+    return data_dir
+
+
+def test_launch_captures_resources_created_just_before_exit(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    child = Mock(pid=123)
+    child.poll.side_effect = [None, None, 1]
+    child.wait.return_value = 1
+    residual = {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default'}
+    final_net = {'links': [], 'routes': [residual], 'rules': []}
+    data_dir = mock_tun_launch(engine, tmp_path, monkeypatch, child, final_net)
+    cleanup = Mock()
+    monkeypatch.setattr(tun, 'cleanup', cleanup)
+
+    with pytest.raises(AppError) as error:
+        engine.launch(
+            'proxies: []', 'a', settings(), 'digest', 'secret', data_directory=data_dir
+        )
+    assert error.value.kind == 'tun_start_failed'
+    cleanup_record = cleanup.call_args.args[0]
+    assert cleanup_record['tun_resources'] == {'routes': [residual], 'rules': []}
+    assert not engine.record_path.exists()
+
+
+def test_tun_log_close_failure_preserves_cleanup_evidence(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    child = Mock(pid=123)
+    child.poll.return_value = None
+    child.wait.return_value = 1
+    residual = {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default'}
+    final_net = {'links': [], 'routes': [residual], 'rules': []}
+    data_dir = mock_tun_launch(engine, tmp_path, monkeypatch, child, final_net)
+    cleanup = Mock(side_effect=AppError('tun_cleanup_failed', 'injected'))
+    monkeypatch.setattr(tun, 'cleanup', cleanup)
+    real_close = os.close
+    close_calls = 0
+
+    def close(descriptor):
+        nonlocal close_calls
+        close_calls += 1
+        if close_calls == 1:
+            raise OSError('injected close failure')
+        real_close(descriptor)
+
+    monkeypatch.setattr('mihomo_py.engine.os.close', close)
+    with pytest.raises(AppError) as error:
+        engine.launch(
+            'proxies: []', 'a', settings(), 'digest', 'secret', data_directory=data_dir
+        )
+    assert error.value.kind == 'tun_cleanup_failed'
+    saved = engine.record()
+    assert saved['pid'] == 123
+    assert saved['identity']['start_ticks'] == '1'
+    assert saved['tun_resources'] == {'routes': [residual], 'rules': []}
+
+
+def test_invalid_tun_snapshot_is_structured_state_error(tmp_path):
+    engine = Engine(tmp_path)
+    record = {
+        'pid': 123,
+        'identity': {'start_ticks': '1', 'boot_id': 'boot', 'cmdline': ['/core']},
+        'data_dir': '/data',
+        'subscription': 'a',
+        'fingerprint': 'digest',
+        'secret': 'secret',
+        'settings': settings(),
+        'tun_resources': {'routes': [], 'rules': [1]},
+    }
+    engine.record_path.write_text(json.dumps(record))
+    with pytest.raises(AppError) as error:
+        engine.record()
+    assert error.value.kind == 'invalid_process_state'
 
 
 def test_enable_stopped_prechecks_validates_then_saves(tmp_path, monkeypatch):

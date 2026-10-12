@@ -228,6 +228,7 @@ class Engine:
             if type(record["pid"]) is not int or record["pid"] <= 1:
                 raise ValueError
             identity = record["identity"]
+            tun_resources = record.get("tun_resources")
             if not (
                 isinstance(identity, dict)
                 and all(isinstance(identity[key], str) for key in ("start_ticks", "boot_id"))
@@ -238,6 +239,19 @@ class Engine:
                     for key in ("data_dir", "subscription", "fingerprint", "secret")
                 )
                 and valid_settings(record["settings"])
+                and (
+                    tun_resources is None
+                    or (
+                        isinstance(tun_resources, dict)
+                        and set(tun_resources) == {"routes", "rules"}
+                        and all(isinstance(tun_resources[key], list) for key in tun_resources)
+                        and all(
+                            isinstance(item, dict)
+                            for key in tun_resources
+                            for item in tun_resources[key]
+                        )
+                    )
+                )
             ):
                 raise ValueError
             return record
@@ -354,8 +368,9 @@ class Engine:
     @tun.serialized
     def launch(self, compiled, name, settings, digest, secret, *, data_directory=None):
         tun_enabled = settings.get("tun", tun.DEFAULT_TUN)["enabled"]
+        baseline = {"routes": [], "rules": []}
         if tun_enabled:
-            tun.preflight(settings["tun"])
+            baseline = tun.resources(tun.preflight(settings["tun"]))
         self.check_ports(settings)
         binary = self.executable()
         data_dir = str(data_directory or self.data_dir(name, parse(compiled)))
@@ -372,6 +387,15 @@ class Engine:
             "fingerprint": digest,
             "secret": secret,
         }
+
+        def save_tun_resources(net):
+            snapshot, clean = tun.owned_snapshot(record, net, baseline)
+            if record.get("tun_resources") != snapshot:
+                record["tun_resources"] = snapshot
+                atomic_write(self.record_path, json.dumps(record))
+            if not clean:
+                tun.require_owned_snapshot(record, net, baseline)
+
         try:
             child = subprocess.Popen(
                 command,
@@ -380,8 +404,6 @@ class Engine:
                 stderr=log_fd,
                 start_new_session=True,
             )
-            os.close(log_fd)
-            log_fd = None
             record["pid"] = child.pid
             deadline = time.monotonic() + self.timeout
             # /proc may briefly expose an empty cmdline immediately after exec.
@@ -398,16 +420,19 @@ class Engine:
                     "内核退出或未能确认启动身份。",
                     suggestion="运行 core logs 查看日志。",
                 )
+            if tun_enabled:
+                record["tun_resources"] = {"routes": [], "rules": []}
             atomic_write(self.record_path, json.dumps(record))
+            os.close(log_fd)
+            log_fd = None
             while time.monotonic() < deadline:
                 if child.poll() is not None:
+                    if tun_enabled:
+                        save_tun_resources(tun.settled_network(record))
                     break
                 net = tun.network() if tun_enabled else None
                 if tun_enabled:
-                    snapshot = tun.resources(net)
-                    if record.get("tun_resources") != snapshot:
-                        record["tun_resources"] = snapshot
-                        atomic_write(self.record_path, json.dumps(record))
+                    save_tun_resources(net)
                 if self.healthy(record) and (
                     not tun_enabled or tun.observation(record, net)["active"]
                 ):
@@ -434,6 +459,8 @@ class Engine:
             except subprocess.TimeoutExpired:
                 child.kill()
                 child.wait()
+            if tun_enabled and record["identity"] is not None:
+                save_tun_resources(tun.settled_network(record))
             tun.cleanup(record)
             self.record_path.unlink(missing_ok=True)
             if tun_enabled and isinstance(failure, AppError) and failure.kind == "start_failed":
