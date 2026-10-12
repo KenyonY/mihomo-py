@@ -221,39 +221,47 @@ class Manager:
             )
         finally:
             log.close()
-        deadline = time.monotonic() + 5
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        while time.monotonic() < deadline:
-            info = self.web_gateway()
-            if info:
-                address = controller_address({"controller_host": info["host"]})
-                request = urllib.request.Request(
-                    f"http://{address}:{info['port']}/mihomo-py/api/subscriptions",
-                    headers={"Authorization": "Bearer " + self.engine.controller_secret()},
-                )
+        try:
+            deadline = time.monotonic() + 5
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            while time.monotonic() < deadline:
+                info = self.web_gateway()
+                if info:
+                    address = controller_address({"controller_host": info["host"]})
+                    request = urllib.request.Request(
+                        f"http://{address}:{info['port']}/mihomo-py/api/subscriptions",
+                        headers={"Authorization": "Bearer " + self.engine.controller_secret()},
+                    )
+                    try:
+                        with opener.open(request, timeout=0.5) as response:
+                            if response.status == 200:
+                                result = self.web()
+                                reap_process(child)
+                                return result
+                    except urllib.error.HTTPError as exc:
+                        exc.close()
+                    except (OSError, urllib.error.URLError):
+                        pass
+                if child.poll() is not None:
+                    break
+                time.sleep(0.05)
+            raise AppError(
+                "web_start_failed",
+                "Web 服务未能启动，请检查 web.log。",
+                5,
+                "运行 mihomo-py web serve 可查看前台错误。",
+            )
+        except BaseException:
+            if child.poll() is None:
+                child.terminate()
                 try:
-                    with opener.open(request, timeout=0.5) as response:
-                        if response.status == 200:
-                            reap_process(child)
-                            return self.web()
-                except (OSError, urllib.error.URLError):
-                    pass
-            if child.poll() is not None:
-                break
-            time.sleep(0.05)
-        if child.poll() is None:
-            child.terminate()
-            try:
-                child.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                child.kill()
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
+            else:
                 child.wait()
-        raise AppError(
-            "web_start_failed",
-            "Web 服务未能启动，请检查 web.log。",
-            5,
-            "运行 mihomo-py web serve 可查看前台错误。",
-        )
+            raise
 
     def stop_web(self):
         with self.web_control():

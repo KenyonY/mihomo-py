@@ -268,7 +268,8 @@ class Engine:
         try:
             fd = pidfd.open_pidfd(record["pid"])
         except ProcessLookupError:
-            tun.check_cleanup(record)
+            tun.cleanup(record)
+            self.record_path.unlink(missing_ok=True)
             return False
         try:
             if not identity_matches(
@@ -277,7 +278,8 @@ class Engine:
                 record["data_dir"],
                 self.runtime_path,
             ):
-                tun.check_cleanup(record)
+                tun.cleanup(record)
+                self.record_path.unlink(missing_ok=True)
                 return False
             pidfd.send_signal(fd, signal.SIGTERM)
             poller = select.poll()
@@ -343,6 +345,9 @@ class Engine:
             ) as sock:
                 sock.sendall(b"\x05\x01\x00")
                 return sock.recv(2) == b"\x05\x00"
+        except urllib.error.HTTPError as exc:
+            exc.close()
+            return False
         except (OSError, urllib.error.URLError, ValueError):
             return False
 

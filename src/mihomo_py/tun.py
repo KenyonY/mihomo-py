@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 from .errors import AppError
@@ -167,14 +168,20 @@ def resources(net):
     }
 
 
-def recorded_resource(item, expected):
+def resource_key(item):
     # iproute2 annotates an input/output interface after that interface disappears.
     stable = {
         key: value
         for key, value in item.items()
         if key not in ("iif_detached", "oif_detached")
     }
-    return stable in expected
+    return json.dumps(stable, sort_keys=True, separators=(",", ":"))
+
+
+def recorded_resources(current, expected):
+    actual = Counter(resource_key(item) for item in current)
+    recorded = Counter(resource_key(item) for item in expected)
+    return all(count <= recorded[key] for key, count in actual.items())
 
 
 def owns_device(record):
@@ -231,7 +238,10 @@ def preflight(value, record=None):
         )
     current = resources(net)
     previous = record.get("tun_resources", {}) if owned else {}
-    if any(item not in previous.get(key, []) for key in current for item in current[key]):
+    if any(
+        not recorded_resources(current[key], previous.get(key, []))
+        for key in current
+    ):
         raise AppError(
             "tun_route_conflict",
             "TUN 路由表或策略路由规则已被占用。",
@@ -263,10 +273,11 @@ def observation(record, net=None):
             for r in rules
         ) and any(r.get("priority") == RULE_START + 10 and "nop" in r for r in rules)
         intact = all(
-            item in net[key]
+            recorded_resources(
+                [item for item in expected.get(key, []) if item["family"] == family],
+                [item for item in net[key] if item.get("family") == family],
+            )
             for key in ("routes", "rules")
-            for item in expected.get(key, [])
-            if item["family"] == family
         )
         result[label] = bool(link and "UP" in link.get("flags", []) and owned
                              and routes and policy and intact)
@@ -325,9 +336,8 @@ def cleanup(record):
             and set(expected) == {"routes", "rules"}
             and all(isinstance(expected[key], list) for key in expected)
             and all(
-                recorded_resource(item, expected[key])
+                recorded_resources(remaining[key], expected[key])
                 for key in remaining
-                for item in remaining[key]
             )
         )
         if not recoverable:

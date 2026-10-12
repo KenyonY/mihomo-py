@@ -1,4 +1,5 @@
 import fcntl
+import io
 import json
 import os
 import pty
@@ -9,11 +10,39 @@ import subprocess
 import sys
 import termios
 import time
+import urllib.error
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from mihomo_py.controller import Controller, instance_id
 from mihomo_py.errors import AppError
+
+
+def controller_record():
+    return {
+        "pid": 123,
+        "identity": {"boot_id": "boot", "start_ticks": "1"},
+        "settings": {"controller_host": "127.0.0.1", "controller_port": 9090},
+        "secret": "secret",
+    }
+
+
+def test_controller_closes_http_error_response(monkeypatch):
+    record = controller_record()
+    controller = Controller(SimpleNamespace(running=lambda: record))
+    error = urllib.error.HTTPError(
+        "http://127.0.0.1:9090/missing", 404, "missing", {}, io.BytesIO()
+    )
+    opener = Mock()
+    opener.open.side_effect = error
+    monkeypatch.setattr("mihomo_py.controller.urllib.request.build_opener", lambda *args: opener)
+
+    with pytest.raises(AppError) as raised:
+        controller.request("/missing")
+    assert raised.value.kind == "api_error"
+    assert error.closed
 
 
 @pytest.fixture

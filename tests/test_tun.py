@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import Mock
@@ -7,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 import yaml
 
-from mihomo_py import tun
+from mihomo_py import pidfd, tun
 from mihomo_py.config import parse, render
 from mihomo_py.engine import Engine
 from mihomo_py.errors import AppError
@@ -138,6 +139,18 @@ def test_permission_platform_and_route_conflicts(monkeypatch):
             tun.preflight(value)
         assert error.value.kind == 'tun_route_conflict' and error.value.code == 5
 
+    recorded = {'family': '-4', 'priority': 9002, 'table': '2022'}
+    net['rules'] = [copy.deepcopy(recorded), copy.deepcopy(recorded)]
+    monkeypatch.setattr(tun, 'owns_device', lambda record: True)
+    record = {
+        'pid': 123,
+        'settings': settings(),
+        'tun_resources': {'routes': [], 'rules': [recorded]},
+    }
+    with pytest.raises(AppError) as error:
+        tun.preflight(value, record)
+    assert error.value.kind == 'tun_route_conflict'
+
 
 def test_device_alone_is_not_active_and_cleanup_is_checked(monkeypatch):
     record = {'pid': 123, 'settings': settings()}
@@ -217,12 +230,72 @@ def test_cleanup_rejects_unrecorded_or_unprivileged_resources(monkeypatch):
     assert error.value.kind == 'tun_cleanup_failed'
     run.assert_not_called()
 
+    record['tun_resources'] = {
+        'routes': [],
+        'rules': [copy.deepcopy(net['rules'][0])],
+    }
+    net['rules'].append(copy.deepcopy(net['rules'][0]))
+    with pytest.raises(AppError) as error:
+        tun.cleanup(record)
+    assert error.value.kind == 'tun_cleanup_failed'
+    run.assert_not_called()
+
+    net['rules'].pop()
     record['tun_resources'] = copy.deepcopy(tun.resources(net))
     monkeypatch.setattr(tun, 'permission', lambda: {'cap_net_admin': False})
     with pytest.raises(AppError) as error:
         tun.cleanup(record)
     assert error.value.kind == 'tun_cleanup_permission_denied' and error.value.code == 4
     run.assert_not_called()
+
+
+def tun_record():
+    return {
+        'pid': 123,
+        'identity': {'start_ticks': '1', 'boot_id': 'boot', 'cmdline': ['/core']},
+        'data_dir': '/data',
+        'settings': settings(),
+        'tun_resources': {'routes': [], 'rules': []},
+    }
+
+
+def test_stop_recovers_if_process_exits_before_pidfd_open(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    record = tun_record()
+    engine.record_path.write_text('{}')
+    monkeypatch.setattr(engine, 'record', lambda: record)
+    monkeypatch.setattr(engine, 'running', lambda: record)
+    monkeypatch.setattr(engine, 'require_process_api', lambda: None)
+    monkeypatch.setattr(pidfd, 'open_pidfd', Mock(side_effect=ProcessLookupError))
+    cleanup = Mock()
+    monkeypatch.setattr(tun, 'cleanup', cleanup)
+
+    assert engine.stop() is False
+    cleanup.assert_called_once_with(record)
+    assert not engine.record_path.exists()
+
+
+def test_stop_recovers_if_identity_disappears_after_pidfd_open(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    record = tun_record()
+    engine.record_path.write_text('{}')
+    monkeypatch.setattr(engine, 'record', lambda: record)
+    monkeypatch.setattr(engine, 'running', lambda: record)
+    monkeypatch.setattr(engine, 'require_process_api', lambda: None)
+    descriptor = os.open('/dev/null', os.O_RDONLY)
+    monkeypatch.setattr(pidfd, 'open_pidfd', lambda pid: descriptor)
+    send_signal = Mock()
+    monkeypatch.setattr(pidfd, 'send_signal', send_signal)
+    monkeypatch.setattr('mihomo_py.engine.process_identity', lambda pid: None)
+    cleanup = Mock()
+    monkeypatch.setattr(tun, 'cleanup', cleanup)
+
+    assert engine.stop() is False
+    cleanup.assert_called_once_with(record)
+    send_signal.assert_not_called()
+    assert not engine.record_path.exists()
+    with pytest.raises(OSError):
+        os.fstat(descriptor)
 
 
 def test_enable_stopped_prechecks_validates_then_saves(tmp_path, monkeypatch):

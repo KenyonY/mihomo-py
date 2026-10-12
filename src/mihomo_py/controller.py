@@ -56,6 +56,7 @@ class Controller:
             with opener.open(request, timeout=timeout) as response:
                 result = None if response.status == 204 else json.load(response)
         except urllib.error.HTTPError as exc:
+            exc.close()
             code = 4 if exc.code in (401, 403) else 3 if exc.code == 404 else 1
             raise AppError(
                 "api_error",

@@ -1,7 +1,10 @@
+import io
 import json
 import os
 import subprocess
 import sys
+import urllib.error
+from unittest.mock import Mock
 
 import pytest
 
@@ -301,6 +304,29 @@ def test_unsupported_kernel_is_rejected_before_start(tmp_path, monkeypatch):
     with pytest.raises(AppError, match="pidfd"):
         Engine(tmp_path).executable()
     assert not list(tmp_path.iterdir())
+
+
+def test_health_check_closes_http_error_response(tmp_path, monkeypatch):
+    from mihomo_py.engine import Engine
+
+    error = urllib.error.HTTPError(
+        "http://127.0.0.1:9090/version", 401, "unauthorized", {}, io.BytesIO()
+    )
+    opener = Mock()
+    opener.open.side_effect = error
+    monkeypatch.setattr("mihomo_py.engine.urllib.request.build_opener", lambda *args: opener)
+    record = {
+        "settings": {
+            "controller_host": "127.0.0.1",
+            "controller_port": 9090,
+            "host": "127.0.0.1",
+            "proxy_port": 7897,
+        },
+        "secret": "secret",
+    }
+
+    assert Engine(tmp_path).healthy(record) is False
+    assert error.closed
 
 
 def test_atomic_write_without_directory_fsync(tmp_path, monkeypatch):
