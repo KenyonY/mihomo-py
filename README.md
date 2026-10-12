@@ -35,6 +35,20 @@ Requires **Python 3.11+**, **Linux kernel 5.3+** with pidfd support, and **x86_6
 
 Subscriptions must be complete Clash/mihomo YAML configurations. Base64 node lists and individual proxy links are not supported.
 
+## Docker
+
+The repository Dockerfile supports `linux/amd64` and `linux/arm64`, and the default image starts the TUI. TUN requires `CAP_NET_ADMIN` and `/dev/net/tun`; use host networking when the container should take over host traffic:
+
+```bash
+docker buildx build --platform linux/amd64 --tag mihomo-py:latest --load .
+mkdir -p ./mihomo-data
+docker run --rm -it --network host \
+  --cap-add NET_ADMIN --device /dev/net/tun:/dev/net/tun \
+  --volume "$PWD/mihomo-data:/data" mihomo-py:latest
+```
+
+Replace the arguments after the image with `tun doctor`, `tun enable --yes`, or another `mihomo-py` subcommand. See [offline packaging](docs/packaging.md#docker-多架构镜像) for multi-platform publishing, Web resources, and the installation check target.
+
 ## Find a node. Switch. Test.
 
 ![TUI: proxy groups, node selection and latency testing](docs/assets/tui-nodes.en.png)

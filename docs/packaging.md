@@ -57,29 +57,77 @@ MIHOMO_BUILD_ARCH=aarch64 python -m build --wheel --installer uv
 
 GitHub 的 `.github/workflows/python-publish.yml` 在推送 `v*` tag 时构建两个架构的 wheel 和源码包，检查发行包元数据，先发布 `web/` 中的 `mihomo-py-web`，再发布主包到 PyPI。发布凭据保存在仓库的 `PYPI_API_TOKEN` Actions secret 中。版本号在 `pyproject.toml`、`src/mihomo_py/__init__.py`、`web/pyproject.toml` 和 `web/src/mihomo_py_web/__init__.py` 中保持一致；使用 `make bump VERSION=0.1.6` 同步这四处（省略 `VERSION` 时自动递增补丁号），再创建对应的 `v<版本号>` tag。
 
-## Docker 多架构验证
+## Docker 多架构镜像
 
-仓库根目录的 `Dockerfile` 使用 BuildKit 多阶段构建：第一阶段在目标架构生成 wheel 并从 `PIP_INDEX_URL` 下载 Python 依赖，最终阶段只用本地 wheelhouse 以 `--no-index` 安装，再运行真实 mihomo 校验、启动、代理访问和停止检查。安装阶段与运行阶段不依赖 GitHub。
+仓库根目录的 `Dockerfile` 使用 BuildKit 多阶段构建：第一阶段在目标架构生成 wheel 和对应的 mihomo 内核，并从 `PIP_INDEX_URL` 下载 Python 依赖；运行阶段只用本地 wheelhouse 以 `--no-index` 安装。默认目标是可直接运行的镜像，`verify` 目标保留真实 mihomo 的安装、启动、代理访问和停止检查。构建和安装阶段不依赖 GitHub。
+
+构建单个平台并加载到本机：
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --build-arg PIP_INDEX_URL=https://your-pypi-mirror/simple \
+  --build-arg INSTALL_WEB=true \
+  --tag mihomo-py:latest \
+  --load .
+```
+
+构建并推送 amd64/arm64 manifest：
 
 ```bash
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   --build-arg PIP_INDEX_URL=https://your-pypi-mirror/simple \
   --build-arg INSTALL_WEB=true \
-  --tag mihomo-py:offline \
-  --load .
-
-docker run --rm --network=none mihomo-py:offline
+  --tag registry.example/mihomo-py:latest \
+  --push .
 ```
 
-多平台 `--load` 需要支持 manifest list 的 Docker image store；否则使用 `--push` 推送到镜像仓库，或分别构建单平台镜像。ARM 在 x86 主机运行需要 BuildKit 提供 QEMU，或使用带 ARM 原生节点的 builder：
+多平台构建需要 BuildKit；ARM 在 x86 主机运行需要 QEMU，或使用带 ARM 原生节点的 builder：
 
 ```bash
 docker run --privileged --rm tonistiigi/binfmt --install arm64
 docker buildx build --platform linux/amd64,linux/arm64 --push \
-  --tag registry.example/mihomo-py:offline .
+  --tag registry.example/mihomo-py:latest .
 ```
 
-若只验证当前机器，使用 `--platform linux/amd64 --load`；容器启动时的检查仍会调用真实包内 mihomo，而非 mock。
+运行容器内的 TUN 并接管宿主机流量时，需要共享宿主机网络命名空间、添加 `CAP_NET_ADMIN`，并映射 TUN 设备：
 
-Docker 默认只验证基础安装；`--build-arg INSTALL_WEB=true` 构建资源包并在最终镜像安装 `[web]`。资源包在 `web/` 独立构建：`python -m build --outdir web-dist web`。开发测试和浏览器验证需要先安装本地 `web/` 包。
+```bash
+mkdir -p ./mihomo-data
+docker run --rm -it \
+  --name mihomo-py \
+  --network host \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun:/dev/net/tun \
+  --volume "$PWD/mihomo-data:/data" \
+  mihomo-py:latest
+```
+
+镜像默认启动 TUI；也可以直接执行命令，例如：
+
+```bash
+docker run --rm -it --network host \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun:/dev/net/tun \
+  --volume "$PWD/mihomo-data:/data" \
+  mihomo-py:latest tun doctor
+```
+
+`--network host` 只在需要接管宿主机流量时使用；省略它时，TUN 和路由只作用于容器网络命名空间。容器内不需要传 `--sudo`，Docker 参数已经提供所需 capability。通常不需要 `--privileged`；如果宿主机 `/dev/net/tun` 的设备节点不是当前容器用户可读写，需要调整设备节点 ACL/组权限。镜像默认使用 root 运行，以便 capability 和设备访问在不同 Docker 主机上保持一致；挂载宿主机目录时请按本机权限策略处理数据目录。容器退出时，容器内的 mihomo 进程也会停止。
+
+只验证安装链路时使用 `verify` 目标：
+
+```bash
+docker buildx build \
+  --target verify \
+  --platform linux/amd64 \
+  --build-arg INSTALL_WEB=true \
+  --tag mihomo-py:verify \
+  --load .
+docker run --rm --network=none mihomo-py:verify
+```
+
+若只验证当前机器，使用对应的 `--platform ... --load`；多平台镜像需要推送到仓库，或分别构建单平台镜像。
+
+`--build-arg INSTALL_WEB=true` 会构建资源包并在运行镜像安装 `[web]`。资源包在 `web/` 独立构建：`python -m build --outdir web-dist web`。开发测试和浏览器验证需要先安装本地 `web/` 包。

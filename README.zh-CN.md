@@ -35,6 +35,20 @@ mihomo-py
 
 订阅须为完整的 Clash/mihomo YAML 配置；不支持 Base64 节点列表或单节点链接。
 
+## Docker
+
+仓库内的 Dockerfile 支持 `linux/amd64` 和 `linux/arm64`，默认镜像启动 TUI。构建并运行时需要给 TUN 容器添加 `CAP_NET_ADMIN` 和 `/dev/net/tun`；需要接管宿主机流量时使用 host 网络：
+
+```bash
+docker buildx build --platform linux/amd64 --tag mihomo-py:latest --load .
+mkdir -p ./mihomo-data
+docker run --rm -it --network host \
+  --cap-add NET_ADMIN --device /dev/net/tun:/dev/net/tun \
+  --volume "$PWD/mihomo-data:/data" mihomo-py:latest
+```
+
+也可以把镜像后的参数替换为 `tun doctor`、`tun enable --yes` 或其他 `mihomo-py` 子命令。多架构发布、Web 资源和安装验收见[离线安装与发行](docs/packaging.md#docker-多架构镜像)。
+
 ## 找节点，切换，测速
 
 ![TUI：代理组选择、节点切换与延迟测试](docs/assets/tui-nodes.png)
