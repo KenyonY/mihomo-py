@@ -197,7 +197,7 @@ def test_cleanup_removes_only_recorded_residual_resources(monkeypatch):
         calls.append(command)
         family = command[1]
         if command[2:4] == ['rule', 'del']:
-            priority = int(command[-1])
+            priority = int(command[5])
             net['rules'][:] = [
                 rule for rule in net['rules']
                 if not (rule['family'] == family and rule['priority'] == priority)
@@ -209,10 +209,12 @@ def test_cleanup_removes_only_recorded_residual_resources(monkeypatch):
     monkeypatch.setattr(tun.subprocess, 'run', run)
     tun.cleanup(record)
     assert calls == [
-        ['/usr/sbin/ip', '-4', 'rule', 'del', 'priority', '9002'],
-        ['/usr/sbin/ip', '-6', 'rule', 'del', 'priority', '9010'],
-        ['/usr/sbin/ip', '-4', 'route', 'flush', 'table', '2022'],
-        ['/usr/sbin/ip', '-6', 'route', 'flush', 'table', '2022'],
+        ['/usr/sbin/ip', '-4', 'rule', 'del', 'priority', '9002', 'table', '2022'],
+        ['/usr/sbin/ip', '-6', 'rule', 'del', 'priority', '9010', 'nop'],
+        ['/usr/sbin/ip', '-4', 'route', 'del', 'default', 'table', '2022',
+         'dev', 'mihomo'],
+        ['/usr/sbin/ip', '-6', 'route', 'del', 'default', 'table', '2022',
+         'dev', 'mihomo'],
     ]
 
 
@@ -247,6 +249,35 @@ def test_cleanup_rejects_unrecorded_or_unprivileged_resources(monkeypatch):
         tun.cleanup(record)
     assert error.value.kind == 'tun_cleanup_permission_denied' and error.value.code == 4
     run.assert_not_called()
+
+
+def test_cleanup_preserves_resource_added_during_recovery(monkeypatch):
+    owned = {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default'}
+    foreign = {'family': '-4', 'table': '2022', 'dev': 'foreign0', 'dst': '10.0.0.0/8'}
+    net = {'links': [], 'routes': [owned], 'rules': []}
+    record = {
+        'pid': 123,
+        'settings': settings(),
+        'tun_resources': {'routes': [copy.deepcopy(owned)], 'rules': []},
+    }
+    monkeypatch.setattr(tun, 'network', lambda: copy.deepcopy(net))
+    monkeypatch.setattr(tun, 'permission', lambda: {'cap_net_admin': True})
+    monkeypatch.setattr(tun, 'ip_tool', lambda: '/usr/sbin/ip')
+
+    def run(command, **kwargs):
+        assert command == [
+            '/usr/sbin/ip', '-4', 'route', 'del', 'default', 'table', '2022',
+            'dev', 'mihomo',
+        ]
+        net['routes'].remove(owned)
+        net['routes'].append(foreign)
+        return Mock(returncode=0)
+
+    monkeypatch.setattr(tun.subprocess, 'run', run)
+    with pytest.raises(AppError) as error:
+        tun.cleanup(record)
+    assert error.value.kind == 'tun_cleanup_failed'
+    assert net['routes'] == [foreign]
 
 
 def tun_record():
@@ -296,6 +327,31 @@ def test_stop_recovers_if_identity_disappears_after_pidfd_open(tmp_path, monkeyp
     assert not engine.record_path.exists()
     with pytest.raises(OSError):
         os.fstat(descriptor)
+
+
+def test_launch_reaps_child_if_log_close_fails(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    child = Mock(pid=123)
+    child.wait.return_value = 0
+    monkeypatch.setattr(engine, 'check_ports', lambda settings: None)
+    monkeypatch.setattr(engine, 'executable', lambda: '/core')
+    monkeypatch.setattr('mihomo_py.engine.subprocess.Popen', lambda *args, **kwargs: child)
+    real_close = os.close
+    close_calls = 0
+
+    def close(descriptor):
+        nonlocal close_calls
+        close_calls += 1
+        if close_calls == 1:
+            raise OSError('injected close failure')
+        real_close(descriptor)
+
+    monkeypatch.setattr('mihomo_py.engine.os.close', close)
+    with pytest.raises(OSError, match='injected'):
+        engine.launch('proxies: []', 'a', settings(False), 'digest', 'secret')
+    child.terminate.assert_called_once_with()
+    child.wait.assert_called_once_with(timeout=5)
+    assert not engine.record_path.exists()
 
 
 def test_enable_stopped_prechecks_validates_then_saves(tmp_path, monkeypatch):

@@ -362,18 +362,9 @@ class Engine:
         atomic_write(self.runtime_path, compiled)
         command = [binary, "-d", data_dir, "-f", str(self.runtime_path)]
         log_fd = os.open(self.log_path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-        try:
-            child = subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=log_fd,
-                stderr=log_fd,
-                start_new_session=True,
-            )
-        finally:
-            os.close(log_fd)
+        child = None
         record = {
-            "pid": child.pid,
+            "pid": None,
             "identity": None,
             "data_dir": data_dir,
             "subscription": name,
@@ -382,6 +373,16 @@ class Engine:
             "secret": secret,
         }
         try:
+            child = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=log_fd,
+                stderr=log_fd,
+                start_new_session=True,
+            )
+            os.close(log_fd)
+            log_fd = None
+            record["pid"] = child.pid
             deadline = time.monotonic() + self.timeout
             # /proc may briefly expose an empty cmdline immediately after exec.
             # Persist only a complete identity, or later stop/status cannot recognize it.
@@ -419,7 +420,14 @@ class Engine:
                 suggestion="运行 core logs 查看日志。",
             )
         except BaseException as failure:
-            # This Popen handle belongs to us even if writing process.json failed.
+            if log_fd is not None:
+                try:
+                    os.close(log_fd)
+                except OSError:
+                    pass
+            if child is None:
+                raise
+            # This Popen handle belongs to us from the instant creation succeeds.
             child.terminate()
             try:
                 child.wait(timeout=5)

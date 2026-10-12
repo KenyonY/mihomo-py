@@ -210,6 +210,7 @@ class Manager:
         log_path.touch(mode=0o600, exist_ok=True)
         log_path.chmod(0o600)
         log = log_path.open("ab")
+        child = None
         try:
             child = subprocess.Popen(
                 command,
@@ -219,9 +220,7 @@ class Manager:
                 start_new_session=True,
                 close_fds=True,
             )
-        finally:
             log.close()
-        try:
             deadline = time.monotonic() + 5
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             while time.monotonic() < deadline:
@@ -252,6 +251,13 @@ class Manager:
                 "运行 mihomo-py web serve 可查看前台错误。",
             )
         except BaseException:
+            if not log.closed:
+                try:
+                    log.close()
+                except OSError:
+                    pass
+            if child is None:
+                raise
             if child.poll() is None:
                 child.terminate()
                 try:

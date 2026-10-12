@@ -2,6 +2,7 @@ import io
 import socket
 import urllib.error
 import urllib.request
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -85,3 +86,40 @@ def test_start_web_closes_http_error_response(tmp_path, monkeypatch):
     assert raised.value.kind == "web_start_failed"
     assert error.closed
     child.wait.assert_called_once_with()
+
+
+def test_start_web_reaps_child_if_log_close_fails(tmp_path, monkeypatch):
+    manager = Manager(tmp_path / "state")
+    child = Mock(pid=123)
+    child.poll.return_value = None
+    log_path = manager.store.root / "web.log"
+    original_open = Path.open
+
+    class FailingClose:
+        def __init__(self, stream):
+            self.stream = stream
+            self.failed = False
+
+        @property
+        def closed(self):
+            return self.stream.closed
+
+        def close(self):
+            if not self.failed:
+                self.failed = True
+                raise OSError("injected close failure")
+            self.stream.close()
+
+    def open_path(path, *args, **kwargs):
+        stream = original_open(path, *args, **kwargs)
+        return FailingClose(stream) if path == log_path else stream
+
+    monkeypatch.setattr("mihomo_py.manager.dashboard_root", lambda: tmp_path)
+    monkeypatch.setattr("mihomo_py.manager.subprocess.Popen", lambda *args, **kwargs: child)
+    monkeypatch.setattr(Path, "open", open_path)
+
+    with pytest.raises(OSError, match="injected"):
+        manager._start_web()
+    child.terminate.assert_called_once_with()
+    child.wait.assert_called_once_with(timeout=5)
+    child.kill.assert_not_called()

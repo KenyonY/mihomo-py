@@ -184,6 +184,85 @@ def recorded_resources(current, expected):
     return all(count <= recorded[key] for key, count in actual.items())
 
 
+def rule_delete_command(binary, rule):
+    ignored = {"family", "iif_detached", "oif_detached"}
+    supported = {
+        "priority", "src", "srclen", "dst", "dstlen", "fwmark", "fwmask",
+        "iif", "oif", "uidrange",
+        "ipproto", "sport", "dport", "tos", "table", "suppress_prefixlength",
+        "suppress_prefixlen", "goto", "protocol", "l3mdev", "not", "nop", "action",
+    }
+    unknown = set(rule) - ignored - supported
+    if unknown:
+        raise ValueError(f"unrecognized policy rule fields: {sorted(unknown)} in {rule!r}")
+    family, priority = rule.get("family"), rule.get("priority")
+    if family not in ("-4", "-6") or type(priority) is not int:
+        raise ValueError("unrecognized policy rule")
+    command = [binary, family, "rule", "del", "priority", str(priority)]
+    if "not" in rule:
+        command.append("not")
+    for key, option in (("src", "from"), ("dst", "to")):
+        if key in rule:
+            value = str(rule[key])
+            length = rule.get(key + "len")
+            if length is not None and value != "all" and "/" not in value:
+                value += "/" + str(length)
+            command.extend((option, value))
+    if "fwmark" in rule:
+        mark = str(rule["fwmark"])
+        if "fwmask" in rule:
+            mark += "/" + str(rule["fwmask"])
+        command.extend(("fwmark", mark))
+    for key in ("iif", "oif", "uidrange", "ipproto", "sport", "dport", "tos"):
+        if key in rule:
+            command.extend((key, str(rule[key])))
+    if rule.get("l3mdev"):
+        command.append("l3mdev")
+    if "table" in rule:
+        command.extend(("table", str(rule["table"])))
+    suppress = rule.get("suppress_prefixlen", rule.get("suppress_prefixlength"))
+    if suppress is not None:
+        command.extend(("suppress_prefixlength", str(suppress)))
+    if "protocol" in rule:
+        command.extend(("protocol", str(rule["protocol"])))
+    if "goto" in rule:
+        command.extend(("goto", str(rule["goto"])))
+    elif "nop" in rule:
+        command.append("nop")
+    elif rule.get("action") in ("blackhole", "unreachable", "prohibit"):
+        command.append(rule["action"])
+    elif "action" in rule:
+        raise ValueError("unrecognized policy rule action")
+    return command
+
+
+def route_delete_command(binary, route):
+    supported = {
+        "family", "table", "dst", "gateway", "dev", "protocol", "scope",
+        "prefsrc", "metric", "type", "flags",
+    }
+    unknown = set(route) - supported
+    if unknown or route.get("flags") not in (None, []):
+        raise ValueError(f"unrecognized route fields: {sorted(unknown)} in {route!r}")
+    family = route.get("family")
+    if family not in ("-4", "-6") or str(route.get("table")) != str(TABLE):
+        raise ValueError("unrecognized route")
+    route_type = route.get("type", "unicast")
+    if route_type not in ("unicast", "blackhole", "unreachable", "prohibit", "throw"):
+        raise ValueError("unrecognized route type")
+    command = [binary, family, "route", "del"]
+    if route_type != "unicast":
+        command.append(route_type)
+    command.extend((str(route.get("dst", "default")), "table", str(TABLE)))
+    for key, option in (
+        ("gateway", "via"), ("dev", "dev"), ("protocol", "proto"),
+        ("scope", "scope"), ("prefsrc", "src"), ("metric", "metric"),
+    ):
+        if key in route:
+            command.extend((option, str(route[key])))
+    return command
+
+
 def owns_device(record):
     if not record or not record["settings"].get("tun", DEFAULT_TUN)["enabled"]:
         return False
@@ -347,30 +426,31 @@ def cleanup(record):
 
         binary = ip_tool()
         operation_error = None
-        for rule in remaining["rules"]:
-            family, priority = rule.get("family"), rule.get("priority")
-            if family not in ("-4", "-6") or type(priority) is not int:
-                raise ValueError("unrecognized policy rule")
-            try:
-                subprocess.run(
-                    [binary, family, "rule", "del", "priority", str(priority)],
-                    capture_output=True,
-                    timeout=3,
-                    check=True,
-                )
-            except (OSError, subprocess.SubprocessError) as exc:
-                # Kernel/core teardown can win this race; final inspection decides success.
-                operation_error = operation_error or exc
-        for family in ("-4", "-6"):
-            if any(route.get("family") == family for route in remaining["routes"]):
+        for kind, items, command_builder in (
+            ("rules", remaining["rules"], rule_delete_command),
+            ("routes", remaining["routes"], route_delete_command),
+        ):
+            for item in items:
+                # Another privileged process may modify the reserved range between
+                # operations. Stop before touching anything not in our snapshot.
+                current = resources(network())
+                if any(
+                    not recorded_resources(current[key], expected[key])
+                    for key in current
+                ):
+                    raise ValueError("new residual resources appeared during cleanup")
+                if not any(resource_key(value) == resource_key(item) for value in current[kind]):
+                    continue
+                command = command_builder(binary, item)
                 try:
                     subprocess.run(
-                        [binary, family, "route", "flush", "table", str(TABLE)],
+                        command,
                         capture_output=True,
                         timeout=3,
                         check=True,
                     )
                 except (OSError, subprocess.SubprocessError) as exc:
+                    # Kernel/core teardown can win this race; final inspection decides success.
                     operation_error = operation_error or exc
         try:
             check_cleanup(record)
