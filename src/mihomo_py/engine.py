@@ -286,16 +286,24 @@ class Engine:
             if stale and stale.get("state") == "starting":
                 identity = process_identity(stale["pid"])
                 if identity:
-                    if not command_matches(identity["cmdline"], stale["command"]):
+                    expected = stale["identity"]
+                    confirmed = (
+                        identity_matches(
+                            identity, expected, stale["data_dir"], self.runtime_path
+                        )
+                        if expected
+                        else command_matches(identity["cmdline"], stale["command"])
+                    )
+                    if not confirmed:
                         raise AppError(
                             "unconfirmed_starting_process",
                             "启动中的进程身份无法确认，已保留恢复记录。",
                             5,
                             "检查 core logs 和进程命令行；不要按 PID 盲目终止其他进程。",
                         )
-                    stale["identity"] = identity
-                    stale["state"] = "running"
-                    atomic_write(self.record_path, json.dumps(stale))
+                    if expected is None:
+                        stale["identity"] = identity
+                        atomic_write(self.record_path, json.dumps(stale))
                     record = stale
                     was_starting = True
             if record is None:
@@ -458,7 +466,8 @@ class Engine:
                 identity = process_identity(child.pid)
                 if identity and command_matches(identity["cmdline"], command):
                     record["identity"] = identity
-                    record["state"] = "running"
+                    if not tun_enabled:
+                        record["state"] = "running"
                     atomic_write(self.record_path, json.dumps(record))
                     break
                 time.sleep(0.01)
@@ -481,6 +490,11 @@ class Engine:
                 if self.healthy(record) and (
                     not tun_enabled or tun.observation(record, net)["active"]
                 ):
+                    if tun_enabled:
+                        # A TUN process is recoverable as "running" only after the
+                        # complete, healthy resource snapshot is durably recorded.
+                        record["state"] = "running"
+                        atomic_write(self.record_path, json.dumps(record))
                     reap_process(child)
                     return record
                 time.sleep(0.1)

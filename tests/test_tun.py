@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import pytest
 import yaml
 
+from mihomo_py import engine as engine_module
 from mihomo_py import pidfd, tun
 from mihomo_py.config import parse, render
 from mihomo_py.engine import Engine
@@ -467,11 +468,45 @@ def test_stop_captures_resources_from_live_tun_starting_process(tmp_path, monkey
     assert not engine.record_path.exists()
 
 
+def test_stop_replaces_partial_snapshot_after_identity_confirmation(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    record = starting_record(engine, True)
+    record['identity'] = {
+        'start_ticks': '1', 'boot_id': 'boot', 'cmdline': record['command']
+    }
+    partial = {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default',
+        'gateway': '198.18.0.2', 'flags': [],
+    }
+    record['tun_resources'] = {'routes': [partial], 'rules': []}
+    descriptor, send_signal = prepare_live_starting_stop(engine, record, monkeypatch)
+    rule = {
+        'family': '-4', 'priority': 9000, 'src': 'all', 'dst': '198.18.0.0',
+        'dstlen': 30, 'table': '2022',
+    }
+    monkeypatch.setattr(
+        tun, 'settled_network',
+        lambda value: {'links': [], 'routes': [partial], 'rules': [rule]},
+    )
+    cleanup = Mock()
+    monkeypatch.setattr(tun, 'cleanup', cleanup)
+
+    assert engine.stop() is True
+    send_signal.assert_called_once_with(descriptor, signal.SIGTERM)
+    saved = cleanup.call_args.args[0]
+    assert saved['state'] == 'starting'
+    assert saved['tun_resources'] == {'routes': [partial], 'rules': [rule]}
+    assert not engine.record_path.exists()
+
+
 def test_stop_preserves_starting_record_after_pid_reuse(tmp_path, monkeypatch):
     engine = Engine(tmp_path)
     record = starting_record(engine, False)
+    record['identity'] = {
+        'start_ticks': '1', 'boot_id': 'boot', 'cmdline': record['command']
+    }
     engine.record_path.write_text(json.dumps(record))
-    reused = {'start_ticks': '2', 'boot_id': 'boot', 'cmdline': ['/other']}
+    reused = {'start_ticks': '2', 'boot_id': 'boot', 'cmdline': record['command']}
     monkeypatch.setattr('mihomo_py.engine.process_identity', lambda pid: reused)
     cleanup = Mock()
     monkeypatch.setattr(tun, 'cleanup', cleanup)
@@ -498,6 +533,39 @@ def test_stop_recovers_exited_tun_starting_process(tmp_path, monkeypatch):
     )
     cleanup = Mock()
     monkeypatch.setattr(tun, 'cleanup', cleanup)
+
+    assert engine.stop() is False
+    assert cleanup.call_args.args[0]['tun_resources'] == {
+        'routes': [residual], 'rules': []
+    }
+    assert not engine.record_path.exists()
+
+
+def test_stop_retries_starting_snapshot_after_inspection_failure(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    record = starting_record(engine, True)
+    record['identity'] = {
+        'start_ticks': '1', 'boot_id': 'boot', 'cmdline': record['command']
+    }
+    engine.record_path.write_text(json.dumps(record))
+    monkeypatch.setattr('mihomo_py.engine.process_identity', lambda pid: None)
+    residual = {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default',
+        'gateway': '198.18.0.2', 'flags': [],
+    }
+    settled = Mock(side_effect=[
+        AppError('tun_inspection_failed', 'injected'),
+        {'links': [], 'routes': [residual], 'rules': []},
+    ])
+    monkeypatch.setattr(tun, 'settled_network', settled)
+    cleanup = Mock()
+    monkeypatch.setattr(tun, 'cleanup', cleanup)
+
+    with pytest.raises(AppError) as error:
+        engine.stop()
+    assert error.value.kind == 'tun_inspection_failed'
+    assert engine.record()['state'] == 'starting'
+    cleanup.assert_not_called()
 
     assert engine.stop() is False
     assert cleanup.call_args.args[0]['tun_resources'] == {
@@ -594,6 +662,51 @@ def mock_tun_launch(engine, tmp_path, monkeypatch, child, final_net):
     monkeypatch.setattr(engine, 'healthy', lambda record: False)
     monkeypatch.setattr('mihomo_py.engine.time.sleep', lambda seconds: None)
     return data_dir
+
+
+def test_tun_launch_persists_snapshot_before_running_state(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    child = Mock(pid=123)
+    child.poll.return_value = None
+    data_dir = str(tmp_path / 'data')
+    command = ['/core', '-d', data_dir, '-f', str(engine.runtime_path)]
+    identity = {'start_ticks': '1', 'boot_id': 'boot', 'cmdline': command}
+    route = {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default',
+        'gateway': '198.18.0.2', 'flags': [],
+    }
+    empty = {'links': [], 'routes': [], 'rules': []}
+    net = {'links': [], 'routes': [route], 'rules': []}
+    monkeypatch.setattr(engine, 'check_ports', lambda value: None)
+    monkeypatch.setattr(engine, 'executable', lambda: '/core')
+    monkeypatch.setattr('mihomo_py.engine.process_identity', lambda pid: identity)
+    monkeypatch.setattr('mihomo_py.engine.subprocess.Popen', lambda *args, **kwargs: child)
+    monkeypatch.setattr(tun, 'preflight', lambda value: empty)
+    monkeypatch.setattr(tun, 'network', lambda: net)
+    monkeypatch.setattr(engine, 'healthy', lambda record: True)
+    monkeypatch.setattr(
+        tun, 'observation',
+        lambda record, observed: {'active': True, 'ipv4': True, 'ipv6': False},
+    )
+    monkeypatch.setattr('mihomo_py.engine.reap_process', lambda process: None)
+    saved = []
+    atomic_write = engine_module.atomic_write
+
+    def track(path, content):
+        atomic_write(path, content)
+        if path == engine.record_path:
+            saved.append(json.loads(content))
+
+    monkeypatch.setattr(engine_module, 'atomic_write', track)
+    result = engine.launch(
+        'proxies: []', 'a', settings(), 'digest', 'secret', data_directory=data_dir
+    )
+
+    states = [record['state'] for record in saved]
+    assert states == ['starting', 'starting', 'starting', 'running']
+    assert saved[1]['identity'] == identity
+    assert saved[2]['tun_resources'] == {'routes': [route], 'rules': []}
+    assert result['state'] == 'running'
 
 
 def test_launch_captures_resources_created_just_before_exit(tmp_path, monkeypatch):
