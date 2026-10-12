@@ -189,7 +189,7 @@ TUN 需要 Linux、iproute2、有效的 CAP_NET_ADMIN 及 `/dev/net/tun` 读写�
 
 `tun doctor` 检查权限、设备/路由冲突，并在临时目录执行真实内核配置校验，不启动 TUN、不修改当前实例。诊断复制当前订阅的 GEO 缓存和实例的 GEO 覆盖文件，支持已有自定义 GEO 缓存的离线校验；本地 provider 文件须在校验环境中可用。输出 `ok/checks/status/proposed`，检查失败退出码 1。`--device/--stack/--exclude-address/--clear-excludes` 可检查候选设置。`tun enable/disable --dry-run` 只输出 JSON 操作意图，退出码 10，不创建目录或启动进程。
 
-恢复时先运行 `tun disable`；停止内核使用 `core stop`。关闭 TUN 前会确认可读取网络状态，检查失败时保留原内核。正常清理由 mihomo 执行，客户端核验设备及路由是否消失；进程被强制终止时，客户端只会清理 `process.json` 中该实例启动期间记录且仍完全匹配的路由和策略规则，不按设备名或保留编号盲删未知资源。清理需要 CAP_NET_ADMIN，因此异常退出后可运行 `mihomo-py --sudo core stop`，随后重试原操作。替换、启动或保存配置失败时使用同一恢复流程；无法证明归属的残留仍保留进程记录并返回 `tun_cleanup_failed`，不会启动普通代理覆盖证据。此时先用 `tun doctor` 和 `core logs` 检查，再由管理员核对，不要盲目删除主机路由。`tun_permission_denied` 和 `tun_cleanup_permission_denied` 退出码 4，设备或路由冲突退出码 5，设备/协议栈/地址参数错误退出码 2；启动/清理失败退出码 1。错误包含稳定类型、修复建议和 `retryable`。
+恢复时先运行 `tun disable`；停止内核使用 `core stop`。关闭 TUN 前会确认可读取网络状态，检查失败时保留原内核。正常清理由 mihomo 执行，客户端核验设备及路由是否消失；进程被强制终止时，客户端只会清理 `process.json` 中该实例启动期间记录、符合当前 TUN 配置且仍完全匹配的路由和策略规则，不按设备名或保留编号盲删未知资源。若客户端在启动确认前中断，后续停止操作会先按完整命令行确认仍存活的内核、终止它，再采集并清理资源；PID 已被复用且命令不符时保留记录，不会误杀。清理需要 CAP_NET_ADMIN，因此异常退出后可运行 `mihomo-py --sudo core stop`，随后重试原操作。替换、启动或保存配置失败时使用同一恢复流程；无法证明归属的残留仍保留进程记录并返回 `tun_cleanup_failed`，不会启动普通代理覆盖证据。此时先用 `tun doctor` 和 `core logs` 检查，再由管理员核对，不要盲目删除主机路由。`tun_permission_denied` 和 `tun_cleanup_permission_denied` 退出码 4，设备或路由冲突退出码 5，设备/协议栈/地址参数错误退出码 2；启动/清理失败退出码 1。错误包含稳定类型、修复建议和 `retryable`。
 
 本期面向本机通过路由进入 TUN 的流量，不提供路由器网关、桌面系统代理或 Web TUN 配置页面。高级参数通过 CLI 设置；TUI 设置页提供开关、状态及 Shell 使用示例。
 

@@ -230,6 +230,7 @@ class Engine:
             state = record.get("state", "running")
             identity = record["identity"]
             tun_resources = record.get("tun_resources")
+            command = record.get("command")
             valid_identity = (
                 isinstance(identity, dict)
                 and all(isinstance(identity[key], str) for key in ("start_ticks", "boot_id"))
@@ -238,20 +239,20 @@ class Engine:
             )
             valid_snapshot = (
                 tun_resources is None
-                or (
-                    isinstance(tun_resources, dict)
-                    and set(tun_resources) == {"routes", "rules"}
-                    and all(isinstance(tun_resources[key], list) for key in tun_resources)
-                    and all(
-                        tun.valid_resource(key, item)
-                        for key in tun_resources
-                        for item in tun_resources[key]
-                    )
-                )
+                or tun.valid_snapshot(tun_resources, record["settings"])
+            )
+            valid_command = (
+                isinstance(command, list)
+                and len(command) == 5
+                and all(isinstance(value, str) and value for value in command)
+                and command[1:] == [
+                    "-d", record["data_dir"], "-f", str(self.runtime_path)
+                ]
             )
             if not (
                 state in ("starting", "running")
                 and (valid_identity or state == "starting" and identity is None)
+                and (state == "running" or valid_command)
                 and all(
                     isinstance(record[key], str)
                     for key in ("data_dir", "subscription", "fingerprint", "secret")
@@ -279,15 +280,36 @@ class Engine:
     @tun.serialized
     def stop(self):
         record = self.running()
+        was_starting = False
         if not record:
             stale = self.record()
-            tun.cleanup(stale)
-            self.record_path.unlink(missing_ok=True)
-            return False
+            if stale and stale.get("state") == "starting":
+                identity = process_identity(stale["pid"])
+                if identity:
+                    if not command_matches(identity["cmdline"], stale["command"]):
+                        raise AppError(
+                            "unconfirmed_starting_process",
+                            "启动中的进程身份无法确认，已保留恢复记录。",
+                            5,
+                            "检查 core logs 和进程命令行；不要按 PID 盲目终止其他进程。",
+                        )
+                    stale["identity"] = identity
+                    stale["state"] = "running"
+                    atomic_write(self.record_path, json.dumps(stale))
+                    record = stale
+                    was_starting = True
+            if record is None:
+                if stale and stale.get("state") == "starting":
+                    self.capture_starting_tun(stale)
+                tun.cleanup(stale)
+                self.record_path.unlink(missing_ok=True)
+                return False
         self.require_process_api()
         try:
             fd = pidfd.open_pidfd(record["pid"])
         except ProcessLookupError:
+            if was_starting:
+                self.capture_starting_tun(record)
             tun.cleanup(record)
             self.record_path.unlink(missing_ok=True)
             return False
@@ -298,6 +320,8 @@ class Engine:
                 record["data_dir"],
                 self.runtime_path,
             ):
+                if was_starting:
+                    self.capture_starting_tun(record)
                 tun.cleanup(record)
                 self.record_path.unlink(missing_ok=True)
                 return False
@@ -312,9 +336,20 @@ class Engine:
             pass
         finally:
             os.close(fd)
+        if was_starting:
+            self.capture_starting_tun(record)
         tun.cleanup(record)
         self.record_path.unlink(missing_ok=True)
         return True
+
+    def capture_starting_tun(self, record):
+        if not record["settings"].get("tun", tun.DEFAULT_TUN)["enabled"]:
+            return
+        snapshot = tun.require_owned_snapshot(
+            record, tun.settled_network(record), {"routes": [], "rules": []}
+        )
+        record["tun_resources"] = snapshot
+        atomic_write(self.record_path, json.dumps(record))
 
     @staticmethod
     def listeners(settings):
@@ -388,6 +423,7 @@ class Engine:
             "pid": None,
             "identity": None,
             "state": "starting",
+            "command": command,
             "data_dir": data_dir,
             "subscription": name,
             "settings": settings,

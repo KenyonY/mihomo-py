@@ -1,6 +1,8 @@
 import copy
+import ipaddress
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 from unittest.mock import Mock
@@ -173,12 +175,18 @@ def test_cleanup_removes_only_recorded_residual_resources(monkeypatch):
     net = {
         'links': [],
         'routes': [
-            {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default'},
-            {'family': '-6', 'table': '2022', 'dev': 'mihomo', 'dst': 'default'},
+            {
+                'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default',
+                'gateway': '198.18.0.2', 'flags': [],
+            },
+            {
+                'family': '-6', 'table': '2022', 'dev': 'mihomo', 'dst': 'default',
+                'gateway': 'fdfe:dcba:9876::2', 'metric': 1024, 'pref': 'medium', 'flags': [],
+            },
         ],
         'rules': [
-            {'family': '-4', 'priority': 9002, 'table': '2022'},
-            {'family': '-6', 'priority': 9010, 'nop': None},
+            {'family': '-4', 'priority': 9002, 'src': 'all', 'table': '2022'},
+            {'family': '-6', 'priority': 9010, 'src': 'all', 'nop': None},
         ],
     }
     record = {
@@ -209,19 +217,23 @@ def test_cleanup_removes_only_recorded_residual_resources(monkeypatch):
     monkeypatch.setattr(tun.subprocess, 'run', run)
     tun.cleanup(record)
     assert calls == [
-        ['/usr/sbin/ip', '-4', 'rule', 'del', 'priority', '9002', 'table', '2022'],
-        ['/usr/sbin/ip', '-6', 'rule', 'del', 'priority', '9010', 'nop'],
+        ['/usr/sbin/ip', '-4', 'rule', 'del', 'priority', '9002',
+         'from', 'all', 'table', '2022'],
+        ['/usr/sbin/ip', '-6', 'rule', 'del', 'priority', '9010', 'from', 'all', 'nop'],
         ['/usr/sbin/ip', '-4', 'route', 'del', 'default', 'table', '2022',
-         'dev', 'mihomo'],
+         'via', '198.18.0.2', 'dev', 'mihomo'],
         ['/usr/sbin/ip', '-6', 'route', 'del', 'default', 'table', '2022',
-         'dev', 'mihomo'],
+         'via', 'fdfe:dcba:9876::2', 'dev', 'mihomo', 'metric', '1024',
+         'pref', 'medium'],
     ]
 
 
 def test_cleanup_rejects_unrecorded_or_unprivileged_resources(monkeypatch):
     net = {
         'links': [], 'routes': [],
-        'rules': [{'family': '-4', 'priority': 9002, 'table': '2022'}],
+        'rules': [
+            {'family': '-4', 'priority': 9002, 'src': 'all', 'table': '2022'}
+        ],
     }
     record = {'pid': 123, 'settings': settings(), 'tun_resources': {'routes': [], 'rules': []}}
     run = Mock()
@@ -283,6 +295,27 @@ def test_cleanup_preserves_resource_added_during_recovery(monkeypatch):
     assert net['routes'] == [foreign]
 
 
+def test_cleanup_rejects_semantically_foreign_snapshot(monkeypatch):
+    foreign = {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': '10.0.0.0/8',
+        'gateway': '198.18.0.2', 'flags': [],
+    }
+    net = {'links': [], 'routes': [foreign], 'rules': []}
+    record = {
+        'pid': 123,
+        'settings': settings(),
+        'tun_resources': {'routes': [copy.deepcopy(foreign)], 'rules': []},
+    }
+    run = Mock()
+    monkeypatch.setattr(tun, 'network', lambda: copy.deepcopy(net))
+    monkeypatch.setattr(tun.subprocess, 'run', run)
+
+    with pytest.raises(AppError) as error:
+        tun.cleanup(record)
+    assert error.value.kind == 'tun_cleanup_failed'
+    run.assert_not_called()
+
+
 def test_startup_snapshot_never_claims_foreign_resources():
     record = tun_record()
     owned = {
@@ -327,9 +360,27 @@ def test_near_mihomo_foreign_rules_are_not_owned(resource):
 @pytest.mark.parametrize('route', [
     {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': '10.0.0.0/8'},
     {'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default', 'metric': 5},
+    {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': '10.0.0.0/8',
+        'gateway': '198.18.0.2', 'flags': [],
+    },
 ])
 def test_same_device_foreign_routes_are_not_owned(route):
     assert not tun.owned_route(route, 'mihomo')
+
+
+def test_only_routes_derived_from_exclusions_are_owned():
+    excluded = ['10.0.0.0/8']
+    expected = tun.route_destinations(excluded, 4)
+    assert ipaddress.ip_network('128.0.0.0/1') in expected
+    assert ipaddress.ip_network('10.0.0.0/8') not in expected
+    route = {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': '128.0.0.0/1',
+        'gateway': '198.18.0.2', 'flags': [],
+    }
+    assert tun.owned_route(route, 'mihomo', excluded)
+    route['dst'] = '10.0.0.0/8'
+    assert not tun.owned_route(route, 'mihomo', excluded)
 
 
 def tun_record():
@@ -340,6 +391,119 @@ def tun_record():
         'settings': settings(),
         'tun_resources': {'routes': [], 'rules': []},
     }
+
+
+def starting_record(engine, enabled):
+    data_dir = str(engine.root / 'data')
+    command = ['/core', '-d', data_dir, '-f', str(engine.runtime_path)]
+    return {
+        'pid': 123,
+        'identity': None,
+        'state': 'starting',
+        'command': command,
+        'data_dir': data_dir,
+        'subscription': 'a',
+        'fingerprint': 'digest',
+        'secret': 'secret',
+        'settings': settings(enabled),
+        **({'tun_resources': {'routes': [], 'rules': []}} if enabled else {}),
+    }
+
+
+class ReadyPoll:
+    def register(self, descriptor, event):
+        self.descriptor = descriptor
+
+    def poll(self, timeout):
+        return [(self.descriptor, 1)]
+
+
+def prepare_live_starting_stop(engine, record, monkeypatch):
+    engine.record_path.write_text(json.dumps(record))
+    identity = {'start_ticks': '1', 'boot_id': 'boot', 'cmdline': record['command']}
+    monkeypatch.setattr('mihomo_py.engine.process_identity', lambda pid: identity)
+    monkeypatch.setattr(engine, 'require_process_api', lambda: None)
+    descriptor = os.open('/dev/null', os.O_RDONLY)
+    monkeypatch.setattr(pidfd, 'open_pidfd', lambda pid: descriptor)
+    monkeypatch.setattr('mihomo_py.engine.select.poll', ReadyPoll)
+    send_signal = Mock()
+    monkeypatch.setattr(pidfd, 'send_signal', send_signal)
+    return descriptor, send_signal
+
+
+def test_stop_terminates_live_non_tun_starting_process(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    record = starting_record(engine, False)
+    descriptor, send_signal = prepare_live_starting_stop(engine, record, monkeypatch)
+    cleanup = Mock()
+    monkeypatch.setattr(tun, 'cleanup', cleanup)
+
+    assert engine.stop() is True
+    send_signal.assert_called_once_with(descriptor, signal.SIGTERM)
+    cleanup.assert_called_once()
+    assert not engine.record_path.exists()
+
+
+def test_stop_captures_resources_from_live_tun_starting_process(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    record = starting_record(engine, True)
+    descriptor, send_signal = prepare_live_starting_stop(engine, record, monkeypatch)
+    residual = {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default',
+        'gateway': '198.18.0.2', 'flags': [],
+    }
+    monkeypatch.setattr(
+        tun, 'settled_network',
+        lambda value: {'links': [], 'routes': [residual], 'rules': []},
+    )
+    cleanup = Mock()
+    monkeypatch.setattr(tun, 'cleanup', cleanup)
+
+    assert engine.stop() is True
+    send_signal.assert_called_once_with(descriptor, signal.SIGTERM)
+    assert cleanup.call_args.args[0]['tun_resources'] == {
+        'routes': [residual], 'rules': []
+    }
+    assert not engine.record_path.exists()
+
+
+def test_stop_preserves_starting_record_after_pid_reuse(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    record = starting_record(engine, False)
+    engine.record_path.write_text(json.dumps(record))
+    reused = {'start_ticks': '2', 'boot_id': 'boot', 'cmdline': ['/other']}
+    monkeypatch.setattr('mihomo_py.engine.process_identity', lambda pid: reused)
+    cleanup = Mock()
+    monkeypatch.setattr(tun, 'cleanup', cleanup)
+
+    with pytest.raises(AppError) as error:
+        engine.stop()
+    assert error.value.kind == 'unconfirmed_starting_process'
+    cleanup.assert_not_called()
+    assert engine.record_path.exists()
+
+
+def test_stop_recovers_exited_tun_starting_process(tmp_path, monkeypatch):
+    engine = Engine(tmp_path)
+    record = starting_record(engine, True)
+    engine.record_path.write_text(json.dumps(record))
+    monkeypatch.setattr('mihomo_py.engine.process_identity', lambda pid: None)
+    residual = {
+        'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': 'default',
+        'gateway': '198.18.0.2', 'flags': [],
+    }
+    monkeypatch.setattr(
+        tun, 'settled_network',
+        lambda value: {'links': [], 'routes': [residual], 'rules': []},
+    )
+    cleanup = Mock()
+    monkeypatch.setattr(tun, 'cleanup', cleanup)
+
+    assert engine.stop() is False
+    assert cleanup.call_args.args[0]['tun_resources'] == {
+        'routes': [residual], 'rules': []
+    }
+    assert not engine.record_path.exists()
 
 
 def test_stop_recovers_if_process_exits_before_pidfd_open(tmp_path, monkeypatch):
@@ -525,6 +689,20 @@ def test_exit_before_identity_preserves_cleanup_evidence(tmp_path, monkeypatch):
     {'routes': [], 'rules': [{'family': '-4', 'priority': '9000'}]},
     {'routes': [{'family': '-4', 'table': [], 'dst': 'default', 'dev': 'mihomo'}],
      'rules': []},
+    {
+        'routes': [{
+            'family': '-4', 'table': '2022', 'dev': 'mihomo', 'dst': '10.0.0.0/8',
+            'gateway': '198.18.0.2', 'flags': [],
+        }],
+        'rules': [],
+    },
+    {
+        'routes': [],
+        'rules': [{
+            'family': '-4', 'priority': 9005, 'src': 'all', 'dst': '198.18.0.0',
+            'dstlen': 30, 'table': '2022',
+        }],
+    },
 ])
 def test_invalid_tun_snapshot_is_structured_state_error(tmp_path, snapshot):
     engine = Engine(tmp_path)

@@ -346,6 +346,8 @@ BACKEND_MESSAGES = {
     "mihomo 拒绝此配置，原配置未替换。": "mihomo rejected this configuration; the original was not replaced.",
     "查看本地诊断文件：{path}": "See the local diagnostic file: {path}",
     "process.json 损坏，无法确认进程身份。": "process.json is corrupted; the process identity cannot be verified.",
+    "启动中的进程身份无法确认，已保留恢复记录。": "The starting process identity could not be verified; its recovery record was retained.",
+    "检查 core logs 和进程命令行；不要按 PID 盲目终止其他进程。": "Inspect core logs and the process command line; do not terminate another process based only on its PID.",
     "内核尚未退出，请检查进程状态。": "The core has not exited. Check the process status.",
     "端口 {port} 不可用。": "Port {port} is unavailable.",
     "用 config set 指定空闲的代理端口和管理端口。": "Use config set to specify available proxy and management ports.",

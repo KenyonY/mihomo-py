@@ -208,11 +208,6 @@ def owned_rule(rule, device="mihomo"):
     family_priority = RULE_START + 1 if family == "-4" else RULE_START
     destination = rule_network(rule, "dst")
     source = rule_network(rule, "src")
-    fake_network = (
-        ipaddress.ip_network("198.18.0.0/15")
-        if family == "-4"
-        else ipaddress.ip_network("fdfe:dcba:9876::/48")
-    )
     tun_network = (
         ipaddress.ip_network("198.18.0.0/30")
         if family == "-4"
@@ -224,7 +219,7 @@ def owned_rule(rule, device="mihomo"):
             and table == str(TABLE)
             and rule.get("src") == "all"
             and destination is not None
-            and destination.subnet_of(fake_network)
+            and destination == tun_network
         )
     if fields == {"priority", "src", "iif", "table", "family"}:
         return (
@@ -296,11 +291,30 @@ def owned_rule(rule, device="mihomo"):
     )
 
 
-def owned_route(route, device):
+def route_destinations(exclude_address, version):
+    routes = [ipaddress.ip_network("0.0.0.0/0" if version == 4 else "::/0")]
+    for value in exclude_address:
+        excluded = ipaddress.ip_network(value, strict=False)
+        if excluded.version != version:
+            continue
+        remaining = []
+        for route in routes:
+            if route.subnet_of(excluded):
+                continue
+            if excluded.subnet_of(route):
+                remaining.extend(route.address_exclude(excluded))
+            else:
+                remaining.append(route)
+        routes = remaining
+    return set(routes)
+
+
+def owned_route(route, device, exclude_address=()):
     fields = set(route)
     try:
         destination = (
-            None if route.get("dst") == "default"
+            ipaddress.ip_network("0.0.0.0/0" if route.get("family") == "-4" else "::/0")
+            if route.get("dst") == "default"
             else ipaddress.ip_network(route.get("dst"), strict=False)
         )
     except (TypeError, ValueError):
@@ -314,14 +328,16 @@ def owned_route(route, device):
         return (
             fields == {"family", "table", "dst", "gateway", "dev", "flags"}
             and common
-            and (destination is None or destination.version == 4)
+            and destination.version == 4
+            and destination in route_destinations(exclude_address, 4)
             and route.get("gateway") == "198.18.0.2"
         )
     return (
         fields
         == {"family", "table", "dst", "gateway", "dev", "metric", "pref", "flags"}
         and common
-        and (destination is None or destination.version == 6)
+        and destination.version == 6
+        and destination in route_destinations(exclude_address, 6)
         and route.get("family") == "-6"
         and route.get("gateway") == "fdfe:dcba:9876::2"
         and route.get("metric") == 1024
@@ -335,8 +351,12 @@ def owned_snapshot(record, net, baseline):
     if any(baseline.values()):
         raise ValueError("TUN resource baseline is not empty")
     device = record["settings"]["tun"]["device"]
+    excluded = record["settings"]["tun"]["exclude_address"]
     owned = {
-        "routes": [route for route in current["routes"] if owned_route(route, device)],
+        "routes": [
+            route for route in current["routes"]
+            if owned_route(route, device, excluded)
+        ],
         "rules": [rule for rule in current["rules"] if owned_rule(rule, device)],
     }
     clean = all(len(owned[key]) == len(current[key]) for key in current)
@@ -468,6 +488,27 @@ def valid_resource(kind, item):
     except (TypeError, ValueError):
         return False
     return True
+
+
+def valid_snapshot(snapshot, settings):
+    try:
+        if not (
+            isinstance(snapshot, dict)
+            and set(snapshot) == {"routes", "rules"}
+            and all(isinstance(snapshot[key], list) for key in snapshot)
+        ):
+            return False
+        device = settings["tun"]["device"]
+        excluded = settings["tun"]["exclude_address"]
+        return all(
+            valid_resource("routes", route) and owned_route(route, device, excluded)
+            for route in snapshot["routes"]
+        ) and all(
+            valid_resource("rules", rule) and owned_rule(rule, device)
+            for rule in snapshot["rules"]
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def owns_device(record):
@@ -618,9 +659,7 @@ def cleanup(record):
         expected = record.get("tun_resources")
         recoverable = (
             not any(x["ifname"] == device for x in net["links"])
-            and isinstance(expected, dict)
-            and set(expected) == {"routes", "rules"}
-            and all(isinstance(expected[key], list) for key in expected)
+            and valid_snapshot(expected, record["settings"])
             and all(
                 recorded_resources(remaining[key], expected[key])
                 for key in remaining
